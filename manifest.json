@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "FileRecall",
+  "version": "0.1.0",
+  "permissions": ["downloads", "tabs", "storage"],
+  "action": {
+    "default_title": "打开 FileRecall 下载历史"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

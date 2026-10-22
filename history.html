@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>下载历史 · FileRecall</title>
+  <link rel="stylesheet" href="history.css">
+  <script type="module" src="history.js"></script>
+</head>
+<body>
+  <svg class="svg-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></symbol>
+    <symbol id="icon-history" viewBox="0 0 24 24"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M20 12a8 8 0 0 0-14-5M4 12a8 8 0 0 0 14 5"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="icon-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2ZM12 9v4M12 17h.01"/></symbol>
+    <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+  </svg>
+
+  <aside class="sidebar" aria-label="FileRecall">
+    <a class="brand" href="history.html" aria-label="FileRecall 下载历史">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M18 6H9v20h14V11l-5-5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M18 6v6h5M11 18h9m-9 0 3-3m-3 3 3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span>FileRecall<span class="brand-caption">让下载记得来处</span></span>
+    </a>
+    <nav aria-label="导航"><a class="nav-item" href="history.html" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#icon-history"/></svg>下载历史</a></nav>
+    <div class="sidebar-footer"><svg class="icon" aria-hidden="true"><use href="#icon-lock"/></svg><span>本地优先<span>记录保存在此浏览器</span></span></div>
+  </aside>
+
+  <main class="main-content" id="main-content">
+    <header class="page-header">
+      <div><p class="eyebrow">YOUR DOWNLOADS, REMEMBERED</p><h1>下载历史</h1><p class="page-description">回看文件，以及它们的来处。</p></div>
+      <button id="refresh" class="button secondary" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg><span>刷新记录</span></button>
+    </header>
+
+    <section class="history-card" aria-label="下载记录">
+      <div class="list-toolbar"><div class="list-title">全部记录 <span id="record-count" class="count">—</span></div><span class="sort-label">按下载时间倒序</span></div>
+      <p id="data-warning" class="data-warning" role="status" hidden></p>
+      <div id="history-state" class="state-panel" role="status" aria-live="polite">
+        <div id="state-icon" class="state-icon"><svg class="icon" aria-hidden="true"><use href="#icon-history"/></svg></div>
+        <h2 id="state-title">正在读取下载记录</h2><p id="state-description">稍等片刻，你的下载即将呈现。</p>
+        <p id="error-detail" class="error-detail" hidden></p><button id="retry" class="button secondary" type="button" hidden>重新读取</button>
+      </div>
+      <div id="record-list" hidden>
+        <div class="list-columns" aria-hidden="true"><span>文件</span><span>来源网站</span><span>下载时间</span><span>下载状态</span><span></span></div>
+        <ul id="records" class="records" aria-label="下载历史，按时间倒序"></ul>
+      </div>
+      <footer class="list-footer"><span class="footer-dot" aria-hidden="true"></span>记录随下载自动更新<span class="footer-hint">点击文件查看详情</span></footer>
+    </section>
+    <p class="page-footnote">每一条来源，都保留它的确定与不确定。</p>
+    <span id="announcement" class="sr-only" aria-live="polite"></span>
+    <noscript>需要启用 JavaScript 才能读取下载记录。</noscript>
+  </main>
+
+  <dialog id="record-detail" aria-labelledby="detail-title">
+    <div class="detail-topbar"><span>下载详情</span><form method="dialog"><button class="icon-button" type="submit" aria-label="关闭下载详情"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></form></div>
+    <div id="detail-content" class="detail-content"></div>
+  </dialog>
+</body>
+</html>

@@ -1,0 +1,151 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  readHistory, sourceView, fileName, text, safeWebUrl, timestamp, formatTime,
+  downloadState, createHistoryLoader,
+} from "./history-view.mjs";
+
+const context = { pageUrl: "https://source.example/files", pageTitle: "Original page", linkUrl: "https://cdn.example/file.zip", clickedText: "Download" };
+const record = (overrides = {}) => ({
+  id: 7, filename: "C:\\Downloads\\file.zip", state: "complete",
+  startTime: "2026-10-22T10:00:00Z", url: "https://cdn.example/file.zip",
+  referrer: "https://source.example/", source: { status: "matched", context }, ...overrides,
+});
+
+test("history reads only DownloadRecord keys, skips corrupt values, and keeps partial records", () => {
+  const data = {
+    "download:7": record(), "download:8": {}, "download:9": null,
+    "download:10": "broken", "download:11": [], preferences: { anything: true },
+  };
+  const original = structuredClone(data);
+  const result = readHistory(data);
+  assert.equal(result.items.length, 2);
+  assert.equal(result.skipped, 3);
+  assert.deepEqual(data, original);
+  assert.deepEqual(readHistory(null), { items: [], skipped: 0 });
+});
+
+test("history sorts by actual start time descending, including timezone offsets", () => {
+  const result = readHistory({
+    "download:1": record({ startTime: "2026-10-22T10:00:00+02:00" }),
+    "download:2": record({ startTime: "2026-10-22T09:00:00Z" }),
+    "download:3": record({ startTime: "bad date" }),
+    "download:4": record({ startTime: null }),
+  });
+  assert.deepEqual(result.items.map((item) => item.key), ["download:2", "download:1", "download:3", "download:4"]);
+});
+
+test("matched and candidate sources never borrow each other's context", () => {
+  const matched = sourceView(record({ source: { status: "matched", context, candidate: { pageTitle: "Wrong" } } }));
+  assert.equal(matched.title, "Original page");
+  assert.equal(matched.site, "source.example");
+  const candidate = sourceView(record({ source: {
+    status: "candidate", context: { pageTitle: "Not confirmed" },
+    candidate: { ...context, pageTitle: "Possible page", linkUrl: null },
+  } }));
+  assert.equal(candidate.status, "candidate");
+  assert.equal(candidate.title, "Possible page");
+  assert.match(candidate.label, /未确认/);
+  assert.equal(candidate.context.linkUrl, null);
+});
+
+test("unknown sources never infer a website or title from referrer, URL, or stray contexts", () => {
+  const result = sourceView(record({ source: { status: "unknown", context, candidate: context } }));
+  assert.equal(result.status, "unknown");
+  assert.equal(result.site, "未知来源");
+  assert.equal(result.context, null);
+});
+
+test("missing or malformed source information degrades without claiming confirmation", () => {
+  for (const source of [null, [], "broken", {}, { status: "__proto__" }, { status: "matched", context: null }, { status: "candidate", candidate: null }]) {
+    assert.equal(sourceView(record({ source })).status, "unknown");
+  }
+  const result = sourceView(record({ source: { status: "matched", context: {} } }));
+  assert.equal(result.title, "页面标题未记录");
+  assert.equal(result.site, "页面地址未记录");
+});
+
+test("Windows and POSIX paths display basenames with sensible missing-field fallbacks", () => {
+  assert.equal(fileName(record()), "file.zip");
+  assert.equal(fileName(record({ filename: "/home/user/report.pdf" })), "report.pdf");
+  assert.equal(fileName(record({ filename: "", state: "in_progress" })), "文件名尚未确定");
+  assert.equal(fileName(record({ filename: null })), "未命名文件");
+  assert.equal(fileName(record({ filename: {} })), "未命名文件");
+});
+
+test("unsafe and malformed URLs cannot become clickable links", () => {
+  for (const value of ["javascript:alert(1)", "java\nscript:alert(1)", "data:text/html,<script>alert(1)</script>", "file:///C:/secret", "//example.com", "/relative", null, {}]) {
+    assert.equal(safeWebUrl(value), null);
+  }
+  assert.equal(safeWebUrl("https://example.com/files?q=1#section"), "https://example.com/files?q=1#section");
+  assert.equal(safeWebUrl("http://example.com/"), "http://example.com/");
+});
+
+test("external strings remain literal text and non-string fields do not get coerced", () => {
+  const hostile = '<img src=x onerror="alert(1)">';
+  assert.equal(text(hostile), hostile);
+  assert.equal(text({ toString() { throw new Error("must not execute"); } }), "未记录");
+  assert.equal(sourceView(record({ source: { status: "candidate", candidate: { ...context, pageTitle: hostile } } })).title, hostile);
+});
+
+test("dates and download states tolerate missing and unexpected values", () => {
+  for (const value of [null, {}, "", "bad"]) {
+    assert.equal(timestamp(value), null);
+    assert.equal(formatTime(value), "时间未知");
+  }
+  assert.notEqual(formatTime("2026-10-22T10:00:00Z"), "时间未知");
+  assert.equal(downloadState("complete").label, "已完成");
+  assert.equal(downloadState("interrupted").label, "已中断");
+  assert.equal(downloadState("in_progress").label, "下载中");
+  for (const value of ["__proto__", "toString", {}, null]) assert.equal(downloadState(value).label, "状态未知");
+});
+
+test("the loader performs a read only and handles empty storage", async () => {
+  const states = [];
+  const load = createHistoryLoader({ async get(key) { assert.equal(key, null); return {}; } }, (state) => states.push(state));
+  await load();
+  assert.deepEqual(states, [{ status: "loading" }, { status: "ready", items: [], skipped: 0 }]);
+});
+
+test("a storage read failure is reported and a later retry succeeds", async () => {
+  const states = [];
+  let failed = false;
+  const load = createHistoryLoader({ async get() {
+    if (!failed) { failed = true; throw new Error("Storage unavailable"); }
+    return { "download:7": record() };
+  } }, (state) => states.push(state));
+  await load();
+  assert.deepEqual(states.at(-1), { status: "error", message: "Storage unavailable" });
+  await load();
+  assert.equal(states.at(-1).status, "ready");
+  assert.equal(states.at(-1).items.length, 1);
+});
+
+test("a slower old read cannot overwrite a newer refresh", async () => {
+  const states = [];
+  let resolveOld;
+  let count = 0;
+  const old = new Promise((resolve) => { resolveOld = resolve; });
+  const load = createHistoryLoader({ get() {
+    return ++count === 1 ? old : Promise.resolve({ "download:8": record({ id: 8 }) });
+  } }, (state) => states.push(state));
+  const first = load();
+  await load();
+  resolveOld({ "download:7": record() });
+  await first;
+  assert.equal(states.at(-1).items[0].record.id, 8);
+  assert.equal(states.filter((state) => state.status === "ready").length, 1);
+});
+
+test("an older read failure cannot replace a newer successful result", async () => {
+  const states = [];
+  let rejectOld;
+  let count = 0;
+  const old = new Promise((_, reject) => { rejectOld = reject; });
+  const load = createHistoryLoader({ get() { return ++count === 1 ? old : Promise.resolve({}); } }, (state) => states.push(state));
+  const first = load();
+  await load();
+  rejectOld(new Error("Stale failure"));
+  await first;
+  assert.equal(states.at(-1).status, "ready");
+});
