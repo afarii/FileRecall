@@ -30,7 +30,7 @@ a {
   color:var(--accent)
 }
 
-button:focus-visible,a:focus-visible,summary:focus-visible {
+button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible {
   outline:3px solid #65aa91;
   outline-offset:4px
 }
@@ -239,6 +239,29 @@ h1 {
   border-radius:14px;
   overflow:hidden;
   box-shadow:0 4px 24px #203a2910
+}
+
+.history-search {
+  padding:23px 24px 0
+}
+
+.history-search label {
+  display:block;
+  font-size:12px;
+  color:var(--muted);
+  margin-bottom:8px
+}
+
+.history-search input {
+  width:100%;
+  min-width:0;
+  padding:11px 13px;
+  font:inherit;
+  font-size:14px;
+  color:inherit;
+  background:#f7f9f8;
+  border:1px solid var(--border);
+  border-radius:8px
 }
 
 .list-toolbar {

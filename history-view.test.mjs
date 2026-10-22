@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   readHistory, sourceView, fileName, text, safeWebUrl, timestamp, formatTime,
-  downloadState, createHistoryLoader,
+  downloadState, createHistoryLoader, searchHistory,
 } from "./history-view.mjs";
 
 const context = { pageUrl: "https://source.example/files", pageTitle: "Original page", linkUrl: "https://cdn.example/file.zip", clickedText: "Download" };
@@ -10,6 +10,44 @@ const record = (overrides = {}) => ({
   id: 7, filename: "C:\\Downloads\\file.zip", state: "complete",
   startTime: "2026-10-22T10:00:00Z", url: "https://cdn.example/file.zip",
   referrer: "https://source.example/", source: { status: "matched", context }, ...overrides,
+});
+
+test("search matches basenames and only the source context selected by its saved status", () => {
+  const items = readHistory({
+    "download:1": record({ filename: "C:/Private/Report.PDF", source: { status: "matched", context,
+      candidate: { pageUrl: "https://wrong.example/", pageTitle: "Wrong candidate" } } }),
+    "download:2": record({ filename: "/tmp/Archive.ZIP", startTime: "2026-10-23T10:00:00Z",
+      source: { status: "candidate", candidate: { pageUrl: "https://Possible.example/hidden-path", pageTitle: "Possible Guide" },
+        context: { pageUrl: "https://wrong.example/", pageTitle: "Wrong confirmed" } } }),
+    "download:3": record({ filename: "C:/Private/Notes.txt", source: { status: "unknown", context, candidate: context } }),
+  }).items;
+  const before = structuredClone(items);
+  const keys = (query) => searchHistory(items, query).map((item) => item.key);
+  assert.deepEqual(keys("pOrT.p"), ["download:1"]);
+  assert.deepEqual(keys("ARCHIVE"), ["download:2"]);
+  assert.deepEqual(keys("SOURCE.EXAMPLE"), ["download:1"]);
+  assert.deepEqual(keys("original PAGE"), ["download:1"]);
+  assert.deepEqual(keys("POSSIBLE.EXAMPLE"), ["download:2"]);
+  assert.deepEqual(keys("sible gui"), ["download:2"]);
+  assert.deepEqual(keys("NOTES"), ["download:3"]);
+  for (const query of ["wrong", "cdn.example", "hidden-path", "Private", "Download", "no match"]) {
+    assert.deepEqual(keys(query), [], query);
+  }
+  assert.deepEqual(keys(""), items.map((item) => item.key));
+  assert.deepEqual(keys("   "), items.map((item) => item.key));
+  assert.deepEqual(keys("."), ["download:2", "download:1", "download:3"]);
+  assert.equal(sourceView(searchHistory(items, "Possible")[0].record).label, "候选 · 未确认");
+  assert.deepEqual(items, before);
+});
+
+test("search tolerates partial records without searching presentation fallbacks or invalid sources", () => {
+  const items = readHistory({ "download:1": {}, "download:2": record({ filename: null,
+    source: { status: "matched", context: null } }), "download:3": record({ filename: {},
+    source: { status: "candidate", candidate: { pageTitle: {}, pageUrl: "javascript:bad" } } }) }).items;
+  assert.equal(searchHistory(items, "").length, 3);
+  for (const query of ["source.example", "未命名", "未记录", "javascript", "暂无", "file.zip"]) {
+    assert.deepEqual(searchHistory(items, query), []);
+  }
 });
 
 test("history reads only DownloadRecord keys, skips corrupt values, and keeps partial records", () => {
