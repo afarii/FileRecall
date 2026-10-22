@@ -1,14 +1,16 @@
 import {
   text, safeWebUrl, fileName, timestamp, formatTime, sourceView, downloadState,
-  REASONS, EVIDENCE, createHistoryLoader,
+  REASONS, EVIDENCE, createHistoryLoader, searchHistory,
 } from "./history-view.mjs";
 
 const $ = (id) => document.getElementById(id);
 const dialog = $("record-detail");
 const refresh = $("refresh");
+const search = $("history-search");
 const rowButtons = new Map();
 let items = [];
 let selectedKey = null;
+let pageStatus = "loading";
 
 function element(tag, className, value) {
   const node = document.createElement(tag);
@@ -141,11 +143,11 @@ function openDetails(key) {
   markSelection();
 }
 
-function renderRecords() {
+function renderRecords(visibleItems) {
   const fragment = document.createDocumentFragment();
   const focusedKey = [...rowButtons].find(([, button]) => button === document.activeElement)?.[0];
   rowButtons.clear();
-  for (const { key, record } of items) {
+  for (const { key, record } of visibleItems) {
     const row = element("li");
     const button = element("button", "record-button");
     button.type = "button";
@@ -196,6 +198,7 @@ function showState(title, description, error = null) {
 }
 
 function updatePage(state) {
+  pageStatus = state.status;
   const loading = state.status === "loading";
   refresh.disabled = loading;
   $("retry").disabled = loading;
@@ -215,15 +218,28 @@ function updatePage(state) {
   $("record-count").textContent = String(items.length);
   $("data-warning").hidden = state.skipped === 0;
   $("data-warning").textContent = `有 ${state.skipped} 条记录格式异常，暂时无法展示。原始数据未被修改。`;
-  renderRecords();
-  if (items.length) {
+  renderSearch();
+}
+
+function renderSearch() {
+  const visibleItems = searchHistory(items, search.value);
+  renderRecords(visibleItems);
+  if (visibleItems.length) {
     $("history-state").hidden = true;
     $("record-list").hidden = false;
+  } else if (search.value.trim()) {
+    showState("没有找到匹配的下载记录", "请尝试其他文件名、来源域名或页面标题，或清空搜索查看全部记录。");
   } else {
     showState("还没有下载记录", "在浏览器中下载一个文件，它会出现在这里。");
   }
-  $("announcement").textContent = `已读取 ${items.length} 条下载记录`;
+  $("announcement").textContent = search.value.trim()
+    ? `找到 ${visibleItems.length} 条匹配记录，共 ${items.length} 条下载记录`
+    : `已读取 ${items.length} 条下载记录`;
 }
+
+search.addEventListener("input", () => {
+  if (pageStatus === "ready") renderSearch();
+});
 
 dialog.addEventListener("click", (event) => {
   if (event.target !== dialog) return;
@@ -235,7 +251,7 @@ dialog.addEventListener("close", () => {
   const key = selectedKey;
   selectedKey = null;
   markSelection();
-  rowButtons.get(key)?.focus({ preventScroll: true });
+  (rowButtons.get(key) ?? search).focus({ preventScroll: true });
 });
 
 if (globalThis.chrome?.storage?.local) {

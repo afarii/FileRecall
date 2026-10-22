@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 // A small DOM substitute runs the real page handlers without a browser or dependencies.
+let pageNumber = 0;
 async function historyPage() {
   const previousDocument = globalThis.document;
   const previousChrome = globalThis.chrome;
@@ -55,14 +56,18 @@ async function historyPage() {
     globalThis.chrome = previousChrome;
   };
   try {
-    await import(`./history.js?drawer-scroll-test`);
+    await import(`./history.js?test=${++pageNumber}`);
   } catch (error) {
     restore();
     throw error;
   }
   const get = document.getElementById;
   const rows = () => get("records").children[0].children.map((row) => row.children[0]);
-  return { get, rows, document, restore, async update() {
+  return { get, rows, document, restore, data, search(query) {
+    get("history-search").value = query;
+    get("history-search").focus();
+    get("history-search").listeners.input();
+  }, async update() {
     storageChanged({ "download:1": { newValue: data["download:1"] } }, "local");
     await new Promise((resolve) => setImmediate(resolve));
   } };
@@ -123,4 +128,68 @@ test("history drawer resets only its own scroll when opened, preserving refresh 
     assert.equal(page.document.activeElement, page.rows()[0]);
     assertListPosition();
   });
+});
+
+test("history search preserves details, candidate labels, ordering and live updates without writing records", async (t) => {
+  const page = await historyPage();
+  t.after(page.restore);
+  page.data["download:2"].source = { status: "candidate", candidate: {
+    pageTitle: "Release Guide", pageUrl: "https://Possible.example/files",
+  } };
+  await page.update();
+  const before = structuredClone(page.data);
+  page.search("POSSIBLE");
+  assert.equal(page.rows().length, 1);
+  assert.match(page.rows()[0].textContent, /file-2.zip.*候选 · 未确认/);
+  assert.equal(page.document.activeElement, page.get("history-search"));
+  page.get("refresh").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(page.get("history-search").value, "POSSIBLE");
+  assert.equal(page.rows().length, 1);
+  page.rows()[0].click();
+  const dialog = page.get("record-detail");
+  const content = page.get("detail-content");
+  assert.match(content.textContent, /候选 · 未确认/);
+  content.scrollTop = 400;
+  await page.update();
+  assert.equal(dialog.open, true);
+  assert.equal(content.scrollTop, 400);
+  assert.equal(page.rows().length, 1);
+  assert.deepEqual(page.data, before);
+
+  page.data["download:2"].filename = "C:/Downloads/renamed.zip";
+  page.data["download:2"].state = "interrupted";
+  await page.update();
+  assert.match(content.textContent, /renamed.zip/);
+  assert.match(content.textContent, /已中断/);
+  assert.equal(content.scrollTop, 400);
+  dialog.close();
+  assert.equal(page.document.activeElement, page.rows()[0]);
+
+  page.search("missing");
+  assert.equal(page.rows().length, 0);
+  assert.equal(page.get("record-list").hidden, true);
+  assert.equal(page.get("history-state").hidden, false);
+  assert.equal(page.get("state-title").textContent, "没有找到匹配的下载记录");
+  assert.match(page.get("announcement").textContent, /找到 0 条/);
+  page.data["download:3"] = { id: 3, filename: "/tmp/Missing.zip", state: "in_progress",
+    startTime: "2026-10-23T10:00:00Z", source: { status: "unknown" } };
+  await page.update();
+  assert.equal(page.get("record-list").hidden, false);
+  assert.equal(page.rows().length, 1);
+  assert.match(page.rows()[0].textContent, /Missing.zip/);
+  page.rows()[0].click();
+  page.data["download:3"].filename = "/tmp/finished.zip";
+  await page.update();
+  assert.equal(page.rows().length, 0);
+  assert.equal(dialog.open, true);
+  assert.match(content.textContent, /finished.zip/);
+  dialog.close();
+  assert.equal(page.document.activeElement, page.get("history-search"));
+  page.search("");
+  assert.equal(page.rows().length, 3);
+  assert.match(page.rows()[0].textContent, /finished.zip/);
+  assert.match(page.rows()[1].textContent, /renamed.zip/);
+  assert.match(page.rows()[2].textContent, /file-1.zip/);
+  assert.equal(page.get("history-state").hidden, true);
 });

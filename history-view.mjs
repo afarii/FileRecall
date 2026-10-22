@@ -68,6 +68,19 @@ export function downloadState(value) {
     ? states[value] : { label: "状态未知", tone: "unknown" };
 }
 
+export function searchHistory(items, query) {
+  const needle = text(query, "").toLowerCase();
+  return items.filter(({ record }) => {
+    const name = text(record.filename, "").split(/[\\/]/).at(-1);
+    if (!needle || name.toLowerCase().includes(needle)) return true;
+    const source = sourceView(record);
+    if (!source.context) return false;
+    const url = safeWebUrl(source.context.pageUrl);
+    return [url ? new URL(url).hostname : "", text(source.context.pageTitle, "")]
+      .some((value) => value.toLowerCase().includes(needle));
+  });
+}
+
 export const REASONS = {
   link_and_page: "下载链接与来源页面一致",
   link_only: "链接一致，但缺少 referrer",
