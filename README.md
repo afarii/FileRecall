@@ -12,7 +12,6 @@ FileRecall is a local-first browser extension that records the source, context, 
 4. Select a record to inspect the download facts, confirmed or candidate context, and matching evidence.
 
 History is read-only and stored locally in this browser. Candidate sources remain explicitly unconfirmed.
-See [download history verification](docs/download-history.md) for manual checks.
 
 ## Run tests
 
