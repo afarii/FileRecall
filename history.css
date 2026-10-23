@@ -30,7 +30,7 @@ a {
   color:var(--accent)
 }
 
-button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible {
+button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visible {
   outline:3px solid #65aa91;
   outline-offset:4px
 }
@@ -245,14 +245,26 @@ h1 {
   padding:23px 24px 0
 }
 
-.history-search label {
+.history-filters {
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+  padding:16px 24px 0
+}
+
+.history-filters > div {
+  flex:1 1 140px;
+  min-width:0
+}
+
+.history-search label,.history-filters label {
   display:block;
   font-size:12px;
   color:var(--muted);
   margin-bottom:8px
 }
 
-.history-search input {
+.history-search input,.history-filters select {
   width:100%;
   min-width:0;
   padding:11px 13px;

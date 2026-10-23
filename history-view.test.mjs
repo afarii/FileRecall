@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   readHistory, sourceView, fileName, text, safeWebUrl, timestamp, formatTime,
-  downloadState, createHistoryLoader, searchHistory,
+  downloadState, createHistoryLoader, searchHistory, filterHistory,
 } from "./history-view.mjs";
 
 const context = { pageUrl: "https://source.example/files", pageTitle: "Original page", linkUrl: "https://cdn.example/file.zip", clickedText: "Download" };
@@ -10,6 +10,54 @@ const record = (overrides = {}) => ({
   id: 7, filename: "C:\\Downloads\\file.zip", state: "complete",
   startTime: "2026-10-22T10:00:00Z", url: "https://cdn.example/file.zip",
   referrer: "https://source.example/", source: { status: "matched", context }, ...overrides,
+});
+
+test("source and download filters intersect with search, preserve order and never mutate records", () => {
+  const items = readHistory({
+    "download:1": record(),
+    "download:2": record({ state: "in_progress", source: { status: "candidate", candidate: context },
+      startTime: "2026-10-23T10:00:00Z" }),
+    "download:3": record({ state: "interrupted", source: { status: "unknown", context, candidate: context } }),
+    "download:4": record({ state: "complete", source: { status: "candidate", candidate: context } }),
+  }).items;
+  const before = structuredClone(items);
+  const keys = (sourceStatus = "", downloadStatus = "", query = "") =>
+    filterHistory(searchHistory(items, query), { sourceStatus, downloadStatus }).map((item) => item.key);
+  const expected = {
+    "": { "": [2, 1, 3, 4], complete: [1, 4], in_progress: [2], interrupted: [3] },
+    matched: { "": [1], complete: [1], in_progress: [], interrupted: [] },
+    candidate: { "": [2, 4], complete: [4], in_progress: [2], interrupted: [] },
+    unknown: { "": [3], complete: [], in_progress: [], interrupted: [3] },
+  };
+  for (const [source, states] of Object.entries(expected)) {
+    for (const [state, ids] of Object.entries(states)) {
+      assert.deepEqual(keys(source, state), ids.map((id) => `download:${id}`));
+      assert.deepEqual(keys(source, state, "FILE.ZIP"), ids.map((id) => `download:${id}`));
+      assert.deepEqual(keys(source, state, "no match"), []);
+    }
+  }
+  assert.deepEqual(keys("candidate", "complete", "ORIGINAL PAGE"), ["download:4"]);
+  assert.deepEqual(keys("unknown", "interrupted", "source.example"), []);
+  assert.equal(sourceView(filterHistory(items, { sourceStatus: "candidate" })[0].record).label, "候选 · 未确认");
+  assert.deepEqual(filterHistory(items), items);
+  assert.deepEqual(items, before);
+});
+
+test("filters keep malformed sources unknown and missing download states out of specific status results", () => {
+  const sources = [null, [], "broken", {}, { status: "__proto__" },
+    { status: "matched", context: null }, { status: "candidate", candidate: null }];
+  const items = sources.map((source, index) => ({ key: `download:${index}`, record: { source, state: index % 2 ? null : "unexpected" } }));
+  items.push({ key: "download:partial", record: {} });
+  const before = structuredClone(items);
+  assert.deepEqual(filterHistory(items, { sourceStatus: "unknown" }), items);
+  for (const sourceStatus of ["matched", "candidate"]) {
+    assert.deepEqual(filterHistory(items, { sourceStatus }), []);
+  }
+  for (const downloadStatus of ["complete", "in_progress", "interrupted"]) {
+    assert.deepEqual(filterHistory(items, { downloadStatus }), []);
+  }
+  assert.deepEqual(filterHistory(items), items);
+  assert.deepEqual(items, before);
 });
 
 test("search matches basenames and only the source context selected by its saved status", () => {

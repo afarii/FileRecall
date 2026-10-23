@@ -37,6 +37,10 @@
 
     <section class="history-card" aria-label="下载记录">
       <div class="history-search"><label for="history-search">搜索下载历史</label><input id="history-search" type="search" placeholder="文件名、来源域名或页面标题" aria-controls="records"></div>
+      <div class="history-filters">
+        <div><label for="source-filter">来源状态</label><select id="source-filter" aria-controls="records"><option value="">全部</option><option value="matched">已确认</option><option value="candidate">候选</option><option value="unknown">未知</option></select></div>
+        <div><label for="download-filter">下载状态</label><select id="download-filter" aria-controls="records"><option value="">全部</option><option value="complete">已完成</option><option value="in_progress">下载中</option><option value="interrupted">已中断</option></select></div>
+      </div>
       <div class="list-toolbar"><div class="list-title">全部记录 <span id="record-count" class="count">—</span></div><span class="sort-label">按下载时间倒序</span></div>
       <p id="data-warning" class="data-warning" role="status" hidden></p>
       <div id="history-state" class="state-panel" role="status" aria-live="polite">
