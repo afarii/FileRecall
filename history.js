@@ -2,6 +2,7 @@ import {
   text, safeWebUrl, fileName, timestamp, formatTime, sourceView, downloadState,
   REASONS, EVIDENCE, createHistoryLoader, searchHistory, filterHistory,
 } from "./history-view.mjs";
+import { createFileActions } from "./history-file-actions.mjs";
 
 const $ = (id) => document.getElementById(id);
 const dialog = $("record-detail");
@@ -13,6 +14,11 @@ const rowButtons = new Map();
 let items = [];
 let selectedKey = null;
 let pageStatus = "loading";
+const fileActions = createFileActions(globalThis.chrome, (state) => {
+  $("show-file").disabled = state.showDisabled;
+  $("open-file").disabled = state.openDisabled;
+  $("file-action-status").textContent = state.message;
+});
 
 function element(tag, className, value) {
   const node = document.createElement(tag);
@@ -128,6 +134,7 @@ function renderDetails(record) {
   evidence.append(element("summary", "", "查看关联依据"), body);
   fragment.append(evidence, element("p", "detail-updated", `记录更新时间：${formatTime(record.updatedAt)}`));
   container.replaceChildren(fragment);
+  fileActions.inspect(record.id);
 }
 
 function markSelection() {
@@ -258,10 +265,26 @@ dialog.addEventListener("click", (event) => {
 });
 dialog.addEventListener("close", () => {
   if (dialog.open) return;
+  fileActions.cancel();
   const key = selectedKey;
   selectedKey = null;
   markSelection();
   (rowButtons.get(key) ?? search).focus({ preventScroll: true });
+});
+
+$("show-file").addEventListener("click", () => fileActions.perform("show"));
+$("open-file").addEventListener("click", () => fileActions.perform("open"));
+$("check-file").addEventListener("click", () => {
+  const selected = items.find((item) => item.key === selectedKey);
+  if (selected) fileActions.inspect(selected.record.id);
+});
+globalThis.chrome?.downloads?.onChanged?.addListener((delta) => {
+  const selected = items.find((item) => item.key === selectedKey);
+  if (dialog.open && selected?.record.id === delta.id && (delta.exists || delta.state)) fileActions.inspect(delta.id);
+});
+globalThis.chrome?.downloads?.onErased?.addListener((id) => {
+  const selected = items.find((item) => item.key === selectedKey);
+  if (dialog.open && selected?.record.id === id) fileActions.inspect(id);
 });
 
 if (globalThis.chrome?.storage?.local) {
