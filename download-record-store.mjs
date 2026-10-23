@@ -63,10 +63,14 @@ export function createDownloadRecordStore(storage, now = () => new Date().toISOS
       const initial = createDownloadRecord(download, association, null);
       return write(download.id, (existing, updatedAt) => {
         if (!existing) return { ...initial, updatedAt };
-        if (existing.source.reason !== "creation_event_unavailable") return existing;
+        const importedPlaceholder = existing.source?.status === "unknown"
+          && existing.source.reason === "history_import"
+          && ["matched", "candidate"].includes(initial.source.status);
+        if (existing.source?.reason !== "creation_event_unavailable" && !importedPlaceholder) return existing;
 
-        // A delta can arrive before creation. Fill missing facts without reverting it.
-        const merged = { ...initial, updatedAt };
+        // Import or a delta can precede creation. Add live evidence without
+        // reverting saved facts or discarding annotations and other user data.
+        const merged = { ...initial, ...existing, source: { ...existing.source, ...initial.source }, updatedAt };
         for (const field of FACT_FIELDS) merged[field] = existing[field] ?? initial[field];
         return merged;
       });

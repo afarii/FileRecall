@@ -51,6 +51,64 @@ test("history import shares the write queue, preserves live associations and nev
   await assert.rejects(store.import(download({ id: "7" })), /Invalid/);
 });
 
+for (const status of ["matched", "candidate"]) {
+  test(`live creation fills an imported placeholder with ${status} evidence while retaining saved facts and annotations`, async () => {
+    const storage = memoryStorage();
+    const store = createDownloadRecordStore(storage, () => updatedAt);
+    await store.import(download({ filename: "imported.zip" }));
+    storage.data["download:7"].annotation = { tags: ["keep"], note: "manual note" };
+    storage.data["download:7"].source.annotation = "manual source note";
+    storage.data["download:7"].url = "https://saved.example/file.zip";
+    const evidence = association(status === "candidate" ? click({ linkUrl: null }) : click());
+    const updating = store.update({ id: 7, filename: { current: "final.zip" }, state: { current: "complete" } });
+    const creating = store.create(download(), evidence);
+    await Promise.all([updating, creating]);
+    const result = storage.data["download:7"];
+    assert.equal(result.filename, "final.zip");
+    assert.equal(result.state, "complete");
+    assert.equal(result.url, "https://saved.example/file.zip");
+    assert.deepEqual(result.annotation, { tags: ["keep"], note: "manual note" });
+    assert.equal(result.source.annotation, "manual source note");
+    assert.deepEqual(result.source, { ...createDownloadRecord(download(), evidence, updatedAt).source,
+      annotation: "manual source note" });
+    const before = structuredClone(result);
+    assert.equal(await store.import(download({ filename: "stale.zip" })), false);
+    await store.create(download(), association());
+    assert.deepEqual(storage.data["download:7"], before);
+  });
+}
+
+test("import queued before live creation cannot suppress reliable source evidence", async () => {
+  const storage = memoryStorage();
+  const store = createDownloadRecordStore(storage);
+  const importing = store.import(download());
+  const creating = store.create(download(), association());
+  assert.equal(await importing, true);
+  await creating;
+  assert.equal(storage.data["download:7"].source.status, "matched");
+});
+
+test("live creation preserves ordinary records and imported placeholders without reliable new context", async () => {
+  for (const source of [
+    { status: "unknown", reason: "no_recent_context" },
+    { status: "matched", reason: "history_import", context: click() },
+    { status: "candidate", reason: "history_import", candidate: click() },
+  ]) {
+    const existing = { ...download(), source, annotation: "keep" };
+    const storage = memoryStorage({ "download:7": existing });
+    await createDownloadRecordStore(storage).create(download(), association());
+    assert.deepEqual(storage.data["download:7"], existing);
+  }
+  const storage = memoryStorage();
+  const store = createDownloadRecordStore(storage);
+  await store.import(download());
+  const before = structuredClone(storage.data["download:7"]);
+  await store.create(download(), { status: "unknown", reason: "no_recent_context" });
+  assert.deepEqual(storage.data["download:7"], before);
+  await store.create(download(), { status: "matched", context: null });
+  assert.deepEqual(storage.data["download:7"], before);
+});
+
 test("creation stores one complete record with separate facts and matched context", async () => {
   const storage = memoryStorage();
   const store = createDownloadRecordStore(storage, () => updatedAt);
