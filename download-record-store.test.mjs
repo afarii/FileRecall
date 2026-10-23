@@ -51,6 +51,111 @@ test("history import shares the write queue, preserves live associations and nev
   await assert.rejects(store.import(download({ id: "7" })), /Invalid/);
 });
 
+test("candidate confirmation, rejection and undo store snapshots separately and preserve original evidence and notes", async () => {
+  const storage = memoryStorage();
+  const store = createDownloadRecordStore(storage, () => updatedAt);
+  await store.create(download(), association(click({ linkUrl: null })));
+  const original = structuredClone(storage.data["download:7"].source);
+  await store.annotate(7, { kind: "note", note: "  useful file  " });
+  await store.annotate(7, { kind: "confirm" });
+  let saved = storage.data["download:7"];
+  assert.equal(saved.userSource.type, "confirmed_candidate");
+  assert.deepEqual(saved.userSource.context, original.candidate);
+  assert.notEqual(saved.userSource.context, saved.source.candidate);
+  assert.equal(saved.userSource.updatedAt, updatedAt);
+  assert.deepEqual(saved.source, original);
+  await store.annotate(7, { kind: "reject" });
+  saved = storage.data["download:7"];
+  assert.equal(saved.userSource.type, "rejected_candidate");
+  assert.deepEqual(saved.userSource.context, original.candidate);
+  await store.annotate(7, { kind: "manual", pageUrl: "https://other.example/page", pageTitle: "Other page" });
+  assert.equal(storage.data["download:7"].userSource.type, "manual");
+  await store.annotate(7, { kind: "clearSource" });
+  assert.equal(storage.data["download:7"].userSource, null);
+  assert.equal(storage.data["download:7"].note, "useful file");
+  assert.deepEqual(storage.data["download:7"].source, original);
+});
+
+test("manual pages and notes can be edited, cleared, reloaded and retained through import and download events", async () => {
+  const storage = memoryStorage();
+  const store = createDownloadRecordStore(storage);
+  await store.import(download());
+  const original = structuredClone(storage.data["download:7"].source);
+  await Promise.all([
+    store.annotate(7, { kind: "manual", pageUrl: " https://Example.com/page " }),
+    store.annotate(7, { kind: "note", note: "Read later" }),
+    store.update({ id: 7, filename: { current: "final.zip" }, state: { current: "complete" } }),
+    store.import(download()),
+  ]);
+  const record = storage.data["download:7"];
+  assert.equal(record.userSource.context.pageUrl, "https://example.com/page");
+  assert.equal(record.userSource.context.pageTitle, "");
+  assert.equal(record.note, "Read later");
+  assert.equal(record.filename, "final.zip");
+  assert.equal(record.state, "complete");
+  assert.deepEqual(record.source, original);
+  const restarted = createDownloadRecordStore(storage);
+  await restarted.annotate(7, { kind: "manual", pageUrl: "http://edited.example/", pageTitle: "Edited" });
+  assert.equal(storage.data["download:7"].userSource.context.pageTitle, "Edited");
+  await restarted.annotate(7, { kind: "note", note: "" });
+  assert.equal(storage.data["download:7"].note, "");
+  await restarted.annotate(7, { kind: "clearSource" });
+  assert.equal(storage.data["download:7"].userSource, null);
+  assert.deepEqual(storage.data["download:7"].source, original);
+});
+
+test("late live creation fills imported evidence without dropping concurrent manual annotations", async () => {
+  const storage = memoryStorage();
+  const store = createDownloadRecordStore(storage);
+  const operations = [
+    store.import(download()),
+    store.annotate(7, { kind: "manual", pageUrl: "https://manual.example/", pageTitle: "Known page" }),
+    store.annotate(7, { kind: "note", note: "keep me" }),
+    store.update({ id: 7, state: { current: "interrupted" } }),
+    store.create(download(), association()),
+    store.import(download()),
+  ];
+  await Promise.all(operations);
+  const record = storage.data["download:7"];
+  assert.equal(record.source.status, "matched");
+  assert.equal(record.userSource.type, "manual");
+  assert.equal(record.note, "keep me");
+  assert.equal(record.state, "interrupted");
+});
+
+test("annotations validate IDs, source operations and text/URL input without modifying records on failure", async () => {
+  const storage = memoryStorage();
+  const store = createDownloadRecordStore(storage);
+  await store.import(download());
+  const before = structuredClone(storage.data);
+  for (const change of [
+    { kind: "confirm" }, { kind: "reject" }, { kind: "bogus" },
+    { kind: "note", note: {} }, { kind: "note", note: "x".repeat(1001) },
+    ...["javascript:alert(1)", "data:text/html,bad", "file:///tmp/file", "//example.com", "invalid"].map((pageUrl) => ({ kind: "manual", pageUrl, pageTitle: "" })),
+    { kind: "manual", pageUrl: "https://example.com/", pageTitle: {} },
+  ]) await assert.rejects(store.annotate(7, change));
+  await assert.rejects(store.annotate(-1, { kind: "note", note: "x" }));
+  await assert.rejects(store.annotate(99, { kind: "note", note: "x" }), /记录已丢失/);
+  assert.deepEqual(storage.data, before);
+  await store.create(download({ id: 8 }), association());
+  await assert.rejects(store.annotate(8, { kind: "manual", pageUrl: "https://example.com/", pageTitle: "" }), /先排除/);
+});
+
+test("failed annotation writes are reported and later queued operations still succeed", async () => {
+  let fail = false;
+  const storage = memoryStorage({}, { set() { if (fail) throw new Error("quota exceeded"); } });
+  const store = createDownloadRecordStore(storage);
+  await store.import(download());
+  fail = true;
+  await assert.rejects(store.annotate(7, { kind: "note", note: "not saved" }), /quota exceeded/);
+  assert.equal(storage.data["download:7"].note, undefined);
+  fail = false;
+  await store.update({ id: 7, state: { current: "complete" } });
+  await store.annotate(7, { kind: "note", note: "saved" });
+  assert.equal(storage.data["download:7"].state, "complete");
+  assert.equal(storage.data["download:7"].note, "saved");
+});
+
 for (const status of ["matched", "candidate"]) {
   test(`live creation fills an imported placeholder with ${status} evidence while retaining saved facts and annotations`, async () => {
     const storage = memoryStorage();

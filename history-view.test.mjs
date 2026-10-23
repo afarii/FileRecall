@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  readHistory, sourceView, fileName, text, safeWebUrl, timestamp, formatTime,
+  readHistory, sourceView, algorithmSourceView, fileName, text, safeWebUrl, timestamp, formatTime,
   downloadState, createHistoryLoader, searchHistory, filterHistory,
 } from "./history-view.mjs";
 
@@ -10,6 +10,39 @@ const record = (overrides = {}) => ({
   id: 7, filename: "C:\\Downloads\\file.zip", state: "complete",
   startTime: "2026-10-22T10:00:00Z", url: "https://cdn.example/file.zip",
   referrer: "https://source.example/", source: { status: "matched", context }, ...overrides,
+});
+
+test("manual source views, note search and filters distinguish user decisions from raw algorithm evidence", () => {
+  const candidate = record({ source: { status: "candidate", candidate: context } });
+  const confirmed = { ...candidate, userSource: { type: "confirmed_candidate", context: { ...context, pageTitle: "Confirmed Snapshot" } } };
+  const rejected = { ...candidate, userSource: { type: "rejected_candidate", context }, note: "Personal Reminder" };
+  const manual = record({ source: { status: "unknown" }, userSource: { type: "manual",
+    context: { pageUrl: "https://manual.example/page", pageTitle: '<img src=x onerror="alert(1)">' } } });
+  const items = [record(), candidate, confirmed, rejected, manual, record({ source: { status: "unknown" } })]
+    .map((record, index) => ({ key: `download:${index}`, record }));
+  const before = structuredClone(items);
+  assert.equal(sourceView(confirmed).status, "confirmed");
+  assert.equal(sourceView(confirmed).label, "人工确认候选");
+  assert.equal(algorithmSourceView(confirmed).status, "candidate");
+  assert.equal(sourceView(rejected).status, "rejected");
+  assert.equal(sourceView(rejected).context, null);
+  assert.equal(sourceView(manual).label, "人工填写");
+  assert.deepEqual(searchHistory([items[3]], "source.example"), []);
+  assert.deepEqual(searchHistory(items, "PERSONAL REMINDER"), [items[3]]);
+  assert.deepEqual(searchHistory(items, "CONFIRMED SNAPSHOT"), [items[2]]);
+  assert.deepEqual(searchHistory(items, "MANUAL.EXAMPLE"), [items[4]]);
+  assert.deepEqual(searchHistory(items, "<img"), [items[4]]);
+  for (const [index, sourceStatus] of ["matched", "candidate", "confirmed", "rejected", "manual", "unknown"].entries()) {
+    assert.deepEqual(filterHistory(items, { sourceStatus }), [items[index]]);
+  }
+  assert.deepEqual(filterHistory(searchHistory(items, "MANUAL.EXAMPLE"), { sourceStatus: "manual", downloadStatus: "complete" }), [items[4]]);
+  assert.deepEqual(filterHistory(items, { sourceStatus: "confirmed", downloadStatus: "interrupted" }), []);
+  assert.equal(sourceView({ ...rejected, userSource: null }).status, "candidate");
+  assert.equal(sourceView({ ...manual, userSource: null }).status, "unknown");
+  for (const userSource of [null, [], "bad", { type: "manual", context: { pageUrl: "javascript:bad" } }, { type: "confirmed_candidate", context: null }]) {
+    assert.equal(sourceView({ ...candidate, userSource }).status, "candidate");
+  }
+  assert.deepEqual(items, before);
 });
 
 test("source and download filters intersect with search, preserve order and never mutate records", () => {

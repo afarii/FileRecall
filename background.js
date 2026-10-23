@@ -87,6 +87,15 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "ANNOTATE_DOWNLOAD") {
+    if (sender?.url !== chrome.runtime.getURL("history.html")) {
+      sendResponse({ error: "请从 FileRecall 历史详情保存标注。" });
+      return;
+    }
+    downloadRecords.annotate(message.id, message.change)
+      .then(() => sendResponse({ saved: true }), (error) => sendResponse({ error: error?.message ?? "保存失败，请重试。" }));
+    return true;
+  }
   if (message?.type === "IMPORT_CHROME_HISTORY") {
     if (sender?.url !== chrome.runtime.getURL("history.html")) {
       sendResponse({ error: "请从 FileRecall 历史页主动导入。" });

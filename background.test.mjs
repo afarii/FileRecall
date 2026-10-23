@@ -117,6 +117,17 @@ test("background events persist through queued writes, restart, candidates, and 
     const repeated = await request(sender);
     assert.equal(repeated.added, 0);
     assert.equal(repeated.skipped, 2);
+    const annotate = (id, change, from = sender) => new Promise((resolve) => {
+      const keepAlive = handlers.message({ type: "ANNOTATE_DOWNLOAD", id, change }, from, resolve);
+      if (from === sender) assert.equal(keepAlive, true);
+    });
+    const sourceBefore = structuredClone(data["download:11"].source);
+    assert.deepEqual(await annotate(11, { kind: "note", note: "remember" }), { saved: true });
+    assert.equal(data["download:11"].note, "remember");
+    assert.deepEqual(data["download:11"].source, sourceBefore);
+    assert.ok((await annotate(11, { kind: "confirm" })).error);
+    assert.ok((await annotate(11, { kind: "note", note: "overwrite" }, { url: "https://example.com/" })).error);
+    assert.equal(data["download:11"].note, "remember");
     globalThis.chrome.downloads.search = async () => { throw new Error("history unavailable"); };
     assert.match((await request(sender)).error, /history unavailable/);
   } finally {

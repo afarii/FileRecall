@@ -36,7 +36,7 @@ export function formatTime(value, dateOnly = false) {
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
-export function sourceView(record) {
+export function algorithmSourceView(record) {
   const source = isObject(record.source) ? record.source : {};
   let status = ["matched", "candidate", "unknown"].includes(source.status) ? source.status : "unknown";
   const context = status === "matched" ? source.context : status === "candidate" ? source.candidate : null;
@@ -60,6 +60,28 @@ export function sourceView(record) {
   };
 }
 
+export function sourceView(record) {
+  const original = algorithmSourceView(record);
+  const user = isObject(record.userSource) ? record.userSource : {};
+  if (user.type === "rejected_candidate") return {
+    status: "rejected", context: null, label: "候选已排除", site: "已排除来源",
+    title: "用户已排除候选页面", note: "已人工排除此候选页面；原始判断和证据仍保留，可撤销。",
+  };
+  if (["confirmed_candidate", "manual"].includes(user.type) && isObject(user.context)) {
+    const manual = user.type === "manual";
+    const url = safeWebUrl(user.context.pageUrl);
+    if (manual && !url) return original;
+    return {
+      status: manual ? "manual" : "confirmed", context: user.context,
+      label: manual ? "人工填写" : "人工确认候选",
+      site: url ? new URL(url).hostname : "页面地址未记录",
+      title: text(user.context.pageTitle, "页面标题未记录"),
+      note: manual ? "此页面信息由用户填写；原始算法判断未修改。" : "用户已确认此候选快照；这不是算法的自动确认，原始证据未修改。",
+    };
+  }
+  return original;
+}
+
 export function downloadState(value) {
   const states = {
     complete: { label: "已完成", tone: "complete" },
@@ -74,7 +96,7 @@ export function searchHistory(items, query) {
   const needle = text(query, "").toLowerCase();
   return items.filter(({ record }) => {
     const name = text(record.filename, "").split(/[\\/]/).at(-1);
-    if (!needle || name.toLowerCase().includes(needle)) return true;
+    if (!needle || name.toLowerCase().includes(needle) || text(record.note, "").toLowerCase().includes(needle)) return true;
     const source = sourceView(record);
     if (!source.context) return false;
     const url = safeWebUrl(source.context.pageUrl);

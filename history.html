@@ -43,7 +43,7 @@
     <section class="history-card" aria-label="下载记录">
       <div class="history-search"><label for="history-search">搜索下载历史</label><input id="history-search" type="search" placeholder="文件名、来源域名或页面标题" aria-controls="records"></div>
       <div class="history-filters">
-        <div><label for="source-filter">来源状态</label><select id="source-filter" aria-controls="records"><option value="">全部</option><option value="matched">已确认</option><option value="candidate">候选</option><option value="unknown">未知</option></select></div>
+        <div><label for="source-filter">来源状态</label><select id="source-filter" aria-controls="records"><option value="">全部</option><option value="matched">自动关联</option><option value="confirmed">人工确认候选</option><option value="manual">人工填写</option><option value="candidate">候选未确认</option><option value="unknown">未知</option><option value="rejected">已排除</option></select></div>
         <div><label for="download-filter">下载状态</label><select id="download-filter" aria-controls="records"><option value="">全部</option><option value="complete">已完成</option><option value="in_progress">下载中</option><option value="interrupted">已中断</option></select></div>
       </div>
       <div class="list-toolbar"><div class="list-title">全部记录 <span id="record-count" class="count">—</span></div><span class="sort-label">按下载时间倒序</span></div>
@@ -70,7 +70,26 @@
       <div class="file-action-buttons"><button id="show-file" class="button secondary" type="button" disabled>在文件夹中显示</button><button id="open-file" class="button secondary" type="button" disabled>打开文件</button><button id="check-file" class="button secondary" type="button">重新检查</button></div>
       <p id="file-action-status" role="status" aria-live="polite"></p>
     </div>
-    <div id="detail-content" class="detail-content"></div>
+    <div id="detail-content" class="detail-content">
+      <div id="detail-summary"></div>
+      <section id="source-card" class="source-banner" aria-label="来源信息">
+        <div id="source-info"></div>
+        <div class="file-action-buttons"><button id="confirm-source" class="button secondary" type="button">确认此来源</button><button id="reject-source" class="button secondary" type="button">不是这个页面</button><button id="edit-source" class="button secondary" type="button" aria-controls="manual-source-fields" aria-expanded="false">补充来源</button><button id="undo-source" class="button secondary" type="button">撤销人工来源</button></div>
+        <div id="manual-source-fields" class="source-editor" hidden>
+          <label for="manual-page-url">来源页面 URL（HTTP/HTTPS）</label><input id="manual-page-url" type="url" maxlength="2048" placeholder="https://example.com/page">
+          <label for="manual-page-title">页面标题（可选）</label><input id="manual-page-title" type="text" maxlength="300">
+          <div class="file-action-buttons"><button id="save-source" class="button secondary" type="button">保存页面信息</button><button id="cancel-source-edit" class="button secondary" type="button">取消修改</button></div>
+        </div>
+        <p id="annotation-status" role="status" aria-live="polite"></p>
+      </section>
+      <div id="detail-record"></div>
+      <details id="annotation-editor" class="annotation-editor">
+        <summary>备注</summary>
+        <label for="record-note">备注（最多 1000 字，清空后保存可删除）</label><textarea id="record-note" rows="3" maxlength="1000"></textarea>
+        <button id="save-note" class="button secondary" type="button">保存备注</button>
+        <p id="note-status" role="status" aria-live="polite"></p>
+      </details>
+    </div>
   </dialog>
 </body>
 </html>

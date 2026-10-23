@@ -1,5 +1,5 @@
 import {
-  text, safeWebUrl, fileName, timestamp, formatTime, sourceView, downloadState,
+  text, safeWebUrl, fileName, timestamp, formatTime, sourceView, algorithmSourceView, downloadState,
   REASONS, EVIDENCE, createHistoryLoader, searchHistory, filterHistory,
 } from "./history-view.mjs";
 import { createFileActions } from "./history-file-actions.mjs";
@@ -14,6 +14,11 @@ const rowButtons = new Map();
 let items = [];
 let selectedKey = null;
 let pageStatus = "loading";
+let editorKey = null;
+let noteDirty = false;
+let sourceDirty = false;
+let sourceExpanded = false;
+let annotationBusy = false;
 const fileActions = createFileActions(globalThis.chrome, (state) => {
   $("show-file").disabled = state.showDisabled;
   $("open-file").disabled = state.openDisabled;
@@ -83,7 +88,7 @@ function section(container, heading, className = "") {
 }
 
 function renderDetails(record) {
-  const container = $("detail-content");
+  const container = $("detail-record");
   const source = sourceView(record);
   const fragment = document.createDocumentFragment();
   const summary = element("div", "detail-summary");
@@ -92,15 +97,18 @@ function renderDetails(record) {
   title.id = "detail-title";
   copy.append(title, stateLabel(record));
   summary.append(tile(record), copy);
-  const banner = element("div", `source-banner ${source.status}`);
-  banner.append(badge(source), element("p", "", source.note));
-  fragment.append(summary, banner);
+  $("detail-summary").replaceChildren(summary);
+  $("source-card").className = `source-banner ${source.status}`;
+  const sourceInfo = document.createDocumentFragment();
+  sourceInfo.append(badge(source), element("p", "", source.note));
 
   if (source.context) {
-    const page = section(fragment, source.status === "candidate" ? "候选页面 · 未确认" : "已确认的来源页面");
+    const page = section(sourceInfo, { candidate: "候选页面 · 未确认", manual: "来源页面 · 人工填写",
+      confirmed: "来源页面 · 人工确认候选", matched: "已确认的来源页面" }[source.status]);
     field(page, "页面标题", source.context.pageTitle);
     field(page, "页面 URL", source.context.pageUrl, { url: true });
   }
+  $("source-info").replaceChildren(sourceInfo);
 
   const facts = section(fragment, "下载信息");
   field(facts, "下载 ID", Number.isSafeInteger(record.id) ? String(record.id) : null);
@@ -111,7 +119,7 @@ function renderDetails(record) {
   field(facts, "下载 URL", record.url, { url: true });
   field(facts, "Referrer · 下载事件提供的引用来源", record.referrer, { url: true });
 
-  if (source.context) {
+  if (source.context && source.status !== "manual") {
     const click = section(fragment, source.status === "candidate" ? "候选点击上下文 · 未确认" : "点击时的上下文", "context");
     field(click, "链接目标 URL", source.context.linkUrl, { url: true });
     field(click, "点击文字", source.context.clickedText);
@@ -121,7 +129,15 @@ function renderDetails(record) {
   const evidence = element("details", "evidence-section");
   const body = element("dl", "evidence-body");
   const savedSource = record.source && typeof record.source === "object" ? record.source : {};
-  field(body, "关联状态", source.label);
+  const original = algorithmSourceView(record);
+  field(body, "原始算法关联状态", original.label);
+  if (original.context) {
+    field(body, "原始页面标题", original.context.pageTitle);
+    field(body, "原始页面 URL", original.context.pageUrl, { url: true });
+    field(body, "原始链接目标 URL", original.context.linkUrl, { url: true });
+    field(body, "原始点击文字", original.context.clickedText);
+    field(body, "原始点击时间", formatTime(original.context.timestamp));
+  }
   const reason = typeof savedSource.reason === "string" ? savedSource.reason : "unspecified";
   field(body, "关联原因", Object.hasOwn(REASONS, reason) ? REASONS[reason] : "未识别的关联原因");
   field(body, "原始原因", reason);
@@ -132,9 +148,45 @@ function renderDetails(record) {
   field(body, "候选数量", Number.isSafeInteger(savedSource.candidateCount) ? String(savedSource.candidateCount) : null);
   field(body, "点击至下载的时间差", Number.isFinite(savedSource.delayMs) ? `${savedSource.delayMs / 1000} 秒` : null);
   evidence.append(element("summary", "", "查看关联依据"), body);
+  if (text(record.note, "")) {
+    const notes = section(fragment, "备注");
+    field(notes, "人工备注", record.note);
+  }
   fragment.append(evidence, element("p", "detail-updated", `记录更新时间：${formatTime(record.updatedAt)}`));
   container.replaceChildren(fragment);
+  renderAnnotationEditor(record);
   fileActions.inspect(record.id);
+}
+
+function renderAnnotationEditor(record) {
+  if (editorKey !== selectedKey) {
+    editorKey = selectedKey;
+    noteDirty = false;
+    sourceDirty = false;
+    sourceExpanded = false;
+    $("annotation-editor").open = false;
+    $("annotation-status").textContent = "";
+    $("note-status").textContent = "";
+  }
+  const source = sourceView(record);
+  const candidate = algorithmSourceView(record).status === "candidate";
+  $("confirm-source").hidden = !candidate || source.status !== "candidate";
+  $("reject-source").hidden = !candidate || !["candidate", "confirmed"].includes(source.status);
+  $("undo-source").hidden = !record.userSource;
+  $("undo-source").textContent = { confirmed: "撤销确认", manual: "清除人工来源", rejected: "撤销排除" }[source.status] ?? "撤销人工来源";
+  const editable = ["unknown", "rejected", "manual"].includes(source.status);
+  $("edit-source").hidden = !editable;
+  $("edit-source").textContent = source.status === "manual" ? "修改来源" : "补充来源";
+  $("manual-source-fields").hidden = !editable || !sourceExpanded;
+  $("edit-source").setAttribute("aria-expanded", String(editable && sourceExpanded));
+  if (!noteDirty) $("record-note").value = text(record.note, "");
+  if (!sourceDirty) {
+    $("manual-page-url").value = source.status === "manual" ? text(source.context.pageUrl, "") : "";
+    $("manual-page-title").value = source.status === "manual" ? text(source.context.pageTitle, "") : "";
+  }
+  for (const id of ["confirm-source", "reject-source", "edit-source", "undo-source", "save-source", "cancel-source-edit", "save-note"]) {
+    $(id).disabled = annotationBusy || !Number.isSafeInteger(record.id) || record.id < 0;
+  }
 }
 
 function markSelection() {
@@ -278,6 +330,25 @@ $("check-file").addEventListener("click", () => {
   const selected = items.find((item) => item.key === selectedKey);
   if (selected) fileActions.inspect(selected.record.id);
 });
+$("record-note").addEventListener("input", () => { noteDirty = true; });
+for (const id of ["manual-page-url", "manual-page-title"]) {
+  $(id).addEventListener("input", () => { sourceDirty = true; });
+}
+$("edit-source").addEventListener("click", () => {
+  const current = items.find((item) => item.key === selectedKey);
+  if (!current || annotationBusy) return;
+  sourceExpanded = true;
+  renderAnnotationEditor(current.record);
+  $("manual-page-url").focus();
+});
+$("cancel-source-edit").addEventListener("click", () => {
+  const current = items.find((item) => item.key === selectedKey);
+  if (!current || annotationBusy) return;
+  sourceExpanded = false;
+  sourceDirty = false;
+  renderAnnotationEditor(current.record);
+  $("edit-source").focus({ preventScroll: true });
+});
 globalThis.chrome?.downloads?.onChanged?.addListener((delta) => {
   const selected = items.find((item) => item.key === selectedKey);
   if (dialog.open && selected?.record.id === delta.id && (delta.exists || delta.state)) fileActions.inspect(delta.id);
@@ -289,6 +360,57 @@ globalThis.chrome?.downloads?.onErased?.addListener((id) => {
 
 if (globalThis.chrome?.storage?.local) {
   const load = createHistoryLoader(chrome.storage.local, updatePage);
+  async function annotate(change) {
+    if (annotationBusy) return;
+    const selected = items.find((item) => item.key === selectedKey);
+    if (!selected) return;
+    const key = selectedKey;
+    const status = change.kind === "note" ? $("note-status") : $("annotation-status");
+    const initiator = document.activeElement;
+    let saved = false;
+    annotationBusy = true;
+    renderAnnotationEditor(selected.record);
+    status.textContent = "正在保存…";
+    try {
+      const result = await chrome.runtime.sendMessage({ type: "ANNOTATE_DOWNLOAD", id: selected.record.id, change });
+      if (!result?.saved) throw new Error(result?.error ?? "未收到保存结果，请重试。");
+      saved = true;
+      if (selectedKey === key) {
+        if (change.kind === "note") {
+          if ($("record-note").value === change.note) noteDirty = false;
+        } else if (change.kind !== "manual" || ($("manual-page-url").value === change.pageUrl
+          && $("manual-page-title").value === change.pageTitle)) {
+          sourceDirty = false;
+          sourceExpanded = false;
+        }
+        status.textContent = "已保存。";
+      }
+      await load();
+    } catch (error) {
+      if (selectedKey === key) status.textContent = `保存失败：${text(error?.message)}`;
+    } finally {
+      annotationBusy = false;
+      const current = items.find((item) => item.key === selectedKey);
+      if (current) renderAnnotationEditor(current.record);
+      if (saved && current && selectedKey === key && change.kind !== "note"
+        && ["confirm-source", "reject-source", "undo-source", "save-source"].some((id) => $(id) === initiator)
+        && (document.activeElement === initiator || document.activeElement === document.body)) {
+        const target = !$("manual-source-fields").hidden ? $("manual-page-url")
+          : !$("edit-source").hidden ? $("edit-source") : !$("confirm-source").hidden ? $("confirm-source") : $("undo-source");
+        target.focus({ preventScroll: true });
+      } else if (!saved && current && selectedKey === key && initiator
+        && ["confirm-source", "reject-source", "undo-source", "save-source", "save-note"].some((id) => $(id) === initiator)
+        && document.activeElement === document.body) {
+        initiator.focus({ preventScroll: true });
+      }
+    }
+  }
+  $("confirm-source").addEventListener("click", () => annotate({ kind: "confirm" }));
+  $("reject-source").addEventListener("click", () => annotate({ kind: "reject" }));
+  $("undo-source").addEventListener("click", () => annotate({ kind: "clearSource" }));
+  $("save-source").addEventListener("click", () => annotate({ kind: "manual",
+    pageUrl: $("manual-page-url").value, pageTitle: $("manual-page-title").value }));
+  $("save-note").addEventListener("click", () => annotate({ kind: "note", note: $("record-note").value }));
   let importCursor = null;
   let importBusy = false;
   let totals = { added: 0, skipped: 0, failed: 0 };
