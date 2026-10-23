@@ -25,7 +25,6 @@ installation to retain local history; do not uninstall or clear extension storag
 
 ## Important limits
 
-- Alpha software; real Chrome regression checks are still required before release.
 - History stays in this browser profile, with no cloud sync or import of past downloads. Search and filters only change the view.
 - Confirmed sources use saved matching evidence. Candidates remain **unconfirmed**; unknown sources are searchable only by filename,
   without inferring a source from download URLs or referrers.
@@ -42,4 +41,3 @@ With Node.js 22 or later:
 node --test
 ```
 
-Before release, also verify source association, combined search/filters, file actions and missing-file/record errors in real Chrome.
