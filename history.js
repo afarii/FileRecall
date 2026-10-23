@@ -1,12 +1,14 @@
 import {
   text, safeWebUrl, fileName, timestamp, formatTime, sourceView, downloadState,
-  REASONS, EVIDENCE, createHistoryLoader, searchHistory,
+  REASONS, EVIDENCE, createHistoryLoader, searchHistory, filterHistory,
 } from "./history-view.mjs";
 
 const $ = (id) => document.getElementById(id);
 const dialog = $("record-detail");
 const refresh = $("refresh");
 const search = $("history-search");
+const sourceFilter = $("source-filter");
+const downloadFilter = $("download-filter");
 const rowButtons = new Map();
 let items = [];
 let selectedKey = null;
@@ -218,28 +220,36 @@ function updatePage(state) {
   $("record-count").textContent = String(items.length);
   $("data-warning").hidden = state.skipped === 0;
   $("data-warning").textContent = `有 ${state.skipped} 条记录格式异常，暂时无法展示。原始数据未被修改。`;
-  renderSearch();
+  renderResults();
 }
 
-function renderSearch() {
-  const visibleItems = searchHistory(items, search.value);
+function renderResults() {
+  const visibleItems = filterHistory(searchHistory(items, search.value), {
+    sourceStatus: sourceFilter.value, downloadStatus: downloadFilter.value,
+  });
+  const hasConditions = search.value.trim() || sourceFilter.value || downloadFilter.value;
   renderRecords(visibleItems);
   if (visibleItems.length) {
     $("history-state").hidden = true;
     $("record-list").hidden = false;
-  } else if (search.value.trim()) {
-    showState("没有找到匹配的下载记录", "请尝试其他文件名、来源域名或页面标题，或清空搜索查看全部记录。");
+  } else if (hasConditions) {
+    showState("没有找到匹配的下载记录", "请调整搜索关键词或筛选条件；清空搜索并将两组筛选设为“全部”可查看全部记录。");
   } else {
     showState("还没有下载记录", "在浏览器中下载一个文件，它会出现在这里。");
   }
-  $("announcement").textContent = search.value.trim()
+  $("announcement").textContent = hasConditions
     ? `找到 ${visibleItems.length} 条匹配记录，共 ${items.length} 条下载记录`
     : `已读取 ${items.length} 条下载记录`;
 }
 
 search.addEventListener("input", () => {
-  if (pageStatus === "ready") renderSearch();
+  if (pageStatus === "ready") renderResults();
 });
+for (const filter of [sourceFilter, downloadFilter]) {
+  filter.addEventListener("change", () => {
+    if (pageStatus === "ready") renderResults();
+  });
+}
 
 dialog.addEventListener("click", (event) => {
   if (event.target !== dialog) return;

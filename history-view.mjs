@@ -81,6 +81,12 @@ export function searchHistory(items, query) {
   });
 }
 
+export function filterHistory(items, { sourceStatus = "", downloadStatus = "" } = {}) {
+  return items.filter(({ record }) =>
+    (!sourceStatus || sourceView(record).status === sourceStatus) &&
+    (!downloadStatus || record.state === downloadStatus));
+}
+
 export const REASONS = {
   link_and_page: "下载链接与来源页面一致",
   link_only: "链接一致，但缺少 referrer",

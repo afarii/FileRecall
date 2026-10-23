@@ -67,6 +67,10 @@ async function historyPage() {
     get("history-search").value = query;
     get("history-search").focus();
     get("history-search").listeners.input();
+  }, filter(id, value) {
+    get(id).value = value;
+    get(id).focus();
+    get(id).listeners.change();
   }, async update() {
     storageChanged({ "download:1": { newValue: data["download:1"] } }, "local");
     await new Promise((resolve) => setImmediate(resolve));
@@ -190,6 +194,72 @@ test("history search preserves details, candidate labels, ordering and live upda
   assert.equal(page.rows().length, 3);
   assert.match(page.rows()[0].textContent, /finished.zip/);
   assert.match(page.rows()[1].textContent, /renamed.zip/);
+  assert.match(page.rows()[2].textContent, /file-1.zip/);
+  assert.equal(page.get("history-state").hidden, true);
+});
+
+test("filters combine with search and survive refreshes while open details keep updating", async (t) => {
+  const page = await historyPage();
+  t.after(page.restore);
+  page.data["download:1"].source = { status: "matched", context: { pageTitle: "Release Guide" } };
+  page.data["download:2"].source = { status: "candidate", candidate: { pageTitle: "Release Guide" } };
+  page.data["download:2"].state = "in_progress";
+  await page.update();
+  const before = structuredClone(page.data);
+  page.filter("source-filter", "matched");
+  assert.equal(page.rows().length, 1);
+  assert.match(page.rows()[0].textContent, /file-1.zip/);
+  page.filter("source-filter", "");
+  page.filter("download-filter", "in_progress");
+  assert.equal(page.rows().length, 1);
+  assert.match(page.rows()[0].textContent, /file-2.zip/);
+  page.filter("source-filter", "candidate");
+  page.search("RELEASE");
+  assert.equal(page.rows().length, 1);
+  assert.match(page.rows()[0].textContent, /候选 · 未确认/);
+  page.get("refresh").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(page.get("source-filter").value, "candidate");
+  assert.equal(page.get("download-filter").value, "in_progress");
+  assert.equal(page.get("history-search").value, "RELEASE");
+  assert.equal(page.rows().length, 1);
+  assert.deepEqual(page.data, before);
+
+  page.rows()[0].click();
+  const dialog = page.get("record-detail");
+  const content = page.get("detail-content");
+  content.scrollTop = 360;
+  page.data["download:2"].state = "complete";
+  await page.update();
+  assert.equal(page.rows().length, 0);
+  assert.equal(page.get("record-list").hidden, true);
+  assert.equal(page.get("state-title").textContent, "没有找到匹配的下载记录");
+  assert.match(page.get("state-description").textContent, /筛选/);
+  assert.equal(dialog.open, true);
+  assert.match(content.textContent, /已完成/);
+  assert.match(content.textContent, /候选 · 未确认/);
+  assert.equal(content.scrollTop, 360);
+  dialog.close();
+  assert.equal(page.document.activeElement, page.get("history-search"));
+
+  page.filter("download-filter", "complete");
+  assert.equal(page.rows().length, 1);
+  page.search("absent");
+  assert.equal(page.rows().length, 0);
+  page.search("");
+  page.filter("source-filter", "unknown");
+  assert.equal(page.rows().length, 0);
+  assert.equal(page.get("history-state").hidden, false);
+  page.data["download:3"] = { id: 3, filename: "/tmp/new.zip", state: "complete",
+    startTime: "2026-10-23T10:00:00Z", source: { status: "unknown" } };
+  await page.update();
+  assert.equal(page.rows().length, 1);
+  assert.match(page.rows()[0].textContent, /new.zip.*来源未知/);
+  page.filter("source-filter", "");
+  page.filter("download-filter", "");
+  assert.equal(page.rows().length, 3);
+  assert.match(page.rows()[0].textContent, /new.zip/);
+  assert.match(page.rows()[1].textContent, /file-2.zip/);
   assert.match(page.rows()[2].textContent, /file-1.zip/);
   assert.equal(page.get("history-state").hidden, true);
 });
