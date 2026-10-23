@@ -71,19 +71,23 @@
       <p id="file-action-status" role="status" aria-live="polite"></p>
     </div>
     <div id="detail-content" class="detail-content">
-      <div id="detail-record"></div>
-      <details id="annotation-editor" class="annotation-editor">
-        <summary>人工标注与备注</summary>
-        <p>人工标注独立保存，可撤销；原始来源判断与证据保持不变。</p>
-        <div class="file-action-buttons"><button id="confirm-source" class="button secondary" type="button">确认这个候选页面</button><button id="reject-source" class="button secondary" type="button">不是这个页面</button><button id="undo-source" class="button secondary" type="button">撤销人工来源</button></div>
-        <div id="manual-source-fields">
+      <div id="detail-summary"></div>
+      <section id="source-card" class="source-banner" aria-label="来源信息">
+        <div id="source-info"></div>
+        <div class="file-action-buttons"><button id="confirm-source" class="button secondary" type="button">确认此来源</button><button id="reject-source" class="button secondary" type="button">不是这个页面</button><button id="edit-source" class="button secondary" type="button" aria-controls="manual-source-fields" aria-expanded="false">补充来源</button><button id="undo-source" class="button secondary" type="button">撤销人工来源</button></div>
+        <div id="manual-source-fields" class="source-editor" hidden>
           <label for="manual-page-url">来源页面 URL（HTTP/HTTPS）</label><input id="manual-page-url" type="url" maxlength="2048" placeholder="https://example.com/page">
           <label for="manual-page-title">页面标题（可选）</label><input id="manual-page-title" type="text" maxlength="300">
-          <button id="save-source" class="button secondary" type="button">保存页面信息</button>
+          <div class="file-action-buttons"><button id="save-source" class="button secondary" type="button">保存页面信息</button><button id="cancel-source-edit" class="button secondary" type="button">取消修改</button></div>
         </div>
+        <p id="annotation-status" role="status" aria-live="polite"></p>
+      </section>
+      <div id="detail-record"></div>
+      <details id="annotation-editor" class="annotation-editor">
+        <summary>备注</summary>
         <label for="record-note">备注（最多 1000 字，清空后保存可删除）</label><textarea id="record-note" rows="3" maxlength="1000"></textarea>
         <button id="save-note" class="button secondary" type="button">保存备注</button>
-        <p id="annotation-status" role="status" aria-live="polite"></p>
+        <p id="note-status" role="status" aria-live="polite"></p>
       </details>
     </div>
   </dialog>

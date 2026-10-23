@@ -17,6 +17,7 @@ let pageStatus = "loading";
 let editorKey = null;
 let noteDirty = false;
 let sourceDirty = false;
+let sourceExpanded = false;
 let annotationBusy = false;
 const fileActions = createFileActions(globalThis.chrome, (state) => {
   $("show-file").disabled = state.showDisabled;
@@ -96,16 +97,18 @@ function renderDetails(record) {
   title.id = "detail-title";
   copy.append(title, stateLabel(record));
   summary.append(tile(record), copy);
-  const banner = element("div", `source-banner ${source.status}`);
-  banner.append(badge(source), element("p", "", source.note));
-  fragment.append(summary, banner);
+  $("detail-summary").replaceChildren(summary);
+  $("source-card").className = `source-banner ${source.status}`;
+  const sourceInfo = document.createDocumentFragment();
+  sourceInfo.append(badge(source), element("p", "", source.note));
 
   if (source.context) {
-    const page = section(fragment, { candidate: "候选页面 · 未确认", manual: "来源页面 · 人工填写",
+    const page = section(sourceInfo, { candidate: "候选页面 · 未确认", manual: "来源页面 · 人工填写",
       confirmed: "来源页面 · 人工确认候选", matched: "已确认的来源页面" }[source.status]);
     field(page, "页面标题", source.context.pageTitle);
     field(page, "页面 URL", source.context.pageUrl, { url: true });
   }
+  $("source-info").replaceChildren(sourceInfo);
 
   const facts = section(fragment, "下载信息");
   field(facts, "下载 ID", Number.isSafeInteger(record.id) ? String(record.id) : null);
@@ -160,21 +163,28 @@ function renderAnnotationEditor(record) {
     editorKey = selectedKey;
     noteDirty = false;
     sourceDirty = false;
+    sourceExpanded = false;
     $("annotation-editor").open = false;
     $("annotation-status").textContent = "";
+    $("note-status").textContent = "";
   }
   const source = sourceView(record);
   const candidate = algorithmSourceView(record).status === "candidate";
-  const annotated = ["confirmed", "manual", "rejected"].includes(source.status);
-  $("confirm-source").hidden = $("reject-source").hidden = !candidate || annotated;
+  $("confirm-source").hidden = !candidate || source.status !== "candidate";
+  $("reject-source").hidden = !candidate || !["candidate", "confirmed"].includes(source.status);
   $("undo-source").hidden = !record.userSource;
-  $("manual-source-fields").hidden = !["unknown", "rejected", "manual"].includes(source.status);
+  $("undo-source").textContent = { confirmed: "撤销确认", manual: "清除人工来源", rejected: "撤销排除" }[source.status] ?? "撤销人工来源";
+  const editable = ["unknown", "rejected", "manual"].includes(source.status);
+  $("edit-source").hidden = !editable;
+  $("edit-source").textContent = source.status === "manual" ? "修改来源" : "补充来源";
+  $("manual-source-fields").hidden = !editable || !sourceExpanded;
+  $("edit-source").setAttribute("aria-expanded", String(editable && sourceExpanded));
   if (!noteDirty) $("record-note").value = text(record.note, "");
   if (!sourceDirty) {
     $("manual-page-url").value = source.status === "manual" ? text(source.context.pageUrl, "") : "";
     $("manual-page-title").value = source.status === "manual" ? text(source.context.pageTitle, "") : "";
   }
-  for (const id of ["confirm-source", "reject-source", "undo-source", "save-source", "save-note"]) {
+  for (const id of ["confirm-source", "reject-source", "edit-source", "undo-source", "save-source", "cancel-source-edit", "save-note"]) {
     $(id).disabled = annotationBusy || !Number.isSafeInteger(record.id) || record.id < 0;
   }
 }
@@ -324,6 +334,21 @@ $("record-note").addEventListener("input", () => { noteDirty = true; });
 for (const id of ["manual-page-url", "manual-page-title"]) {
   $(id).addEventListener("input", () => { sourceDirty = true; });
 }
+$("edit-source").addEventListener("click", () => {
+  const current = items.find((item) => item.key === selectedKey);
+  if (!current || annotationBusy) return;
+  sourceExpanded = true;
+  renderAnnotationEditor(current.record);
+  $("manual-page-url").focus();
+});
+$("cancel-source-edit").addEventListener("click", () => {
+  const current = items.find((item) => item.key === selectedKey);
+  if (!current || annotationBusy) return;
+  sourceExpanded = false;
+  sourceDirty = false;
+  renderAnnotationEditor(current.record);
+  $("edit-source").focus({ preventScroll: true });
+});
 globalThis.chrome?.downloads?.onChanged?.addListener((delta) => {
   const selected = items.find((item) => item.key === selectedKey);
   if (dialog.open && selected?.record.id === delta.id && (delta.exists || delta.state)) fileActions.inspect(delta.id);
@@ -340,26 +365,44 @@ if (globalThis.chrome?.storage?.local) {
     const selected = items.find((item) => item.key === selectedKey);
     if (!selected) return;
     const key = selectedKey;
+    const status = change.kind === "note" ? $("note-status") : $("annotation-status");
+    const initiator = document.activeElement;
+    let saved = false;
     annotationBusy = true;
     renderAnnotationEditor(selected.record);
-    $("annotation-status").textContent = "正在保存…";
+    status.textContent = "正在保存…";
     try {
       const result = await chrome.runtime.sendMessage({ type: "ANNOTATE_DOWNLOAD", id: selected.record.id, change });
       if (!result?.saved) throw new Error(result?.error ?? "未收到保存结果，请重试。");
+      saved = true;
       if (selectedKey === key) {
         if (change.kind === "note") {
           if ($("record-note").value === change.note) noteDirty = false;
         } else if (change.kind !== "manual" || ($("manual-page-url").value === change.pageUrl
-          && $("manual-page-title").value === change.pageTitle)) sourceDirty = false;
-        $("annotation-status").textContent = "已保存。";
+          && $("manual-page-title").value === change.pageTitle)) {
+          sourceDirty = false;
+          sourceExpanded = false;
+        }
+        status.textContent = "已保存。";
       }
       await load();
     } catch (error) {
-      if (selectedKey === key) $("annotation-status").textContent = `保存失败：${text(error?.message)}`;
+      if (selectedKey === key) status.textContent = `保存失败：${text(error?.message)}`;
     } finally {
       annotationBusy = false;
       const current = items.find((item) => item.key === selectedKey);
       if (current) renderAnnotationEditor(current.record);
+      if (saved && current && selectedKey === key && change.kind !== "note"
+        && ["confirm-source", "reject-source", "undo-source", "save-source"].some((id) => $(id) === initiator)
+        && (document.activeElement === initiator || document.activeElement === document.body)) {
+        const target = !$("manual-source-fields").hidden ? $("manual-page-url")
+          : !$("edit-source").hidden ? $("edit-source") : !$("confirm-source").hidden ? $("confirm-source") : $("undo-source");
+        target.focus({ preventScroll: true });
+      } else if (!saved && current && selectedKey === key && initiator
+        && ["confirm-source", "reject-source", "undo-source", "save-source", "save-note"].some((id) => $(id) === initiator)
+        && document.activeElement === document.body) {
+        initiator.focus({ preventScroll: true });
+      }
     }
   }
   $("confirm-source").addEventListener("click", () => annotate({ kind: "confirm" }));
