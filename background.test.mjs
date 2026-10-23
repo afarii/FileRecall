@@ -92,6 +92,33 @@ test("background events persist through queued writes, restart, candidates, and 
     failWrites = false;
     await handlers.change({ id: 7, state: { current: "complete" } });
     assert.equal(data["download:7"].state, "complete");
+
+    let historyQueries = 0;
+    globalThis.chrome.downloads.search = async (query) => {
+      historyQueries++;
+      assert.equal(query.limit, 101);
+      return [{ ...item, id: 11 }, { ...item, id: 7 }];
+    };
+    const original = structuredClone(data);
+    const request = (sender) => new Promise((resolve) => {
+      const keepAlive = handlers.message({ type: "IMPORT_CHROME_HISTORY" }, sender, resolve);
+      if (sender.url.endsWith("history.html")) assert.equal(keepAlive, true);
+    });
+    const refused = await request({ url: "https://example.com/" });
+    assert.match(refused.error, /历史页主动导入/);
+    assert.equal(historyQueries, 0);
+    const sender = { url: "chrome-extension://filerecall/history.html" };
+    const imported = await request(sender);
+    assert.equal(imported.added, 1);
+    assert.equal(imported.skipped, 1);
+    assert.equal(data["download:11"].source.status, "unknown");
+    assert.equal(data["download:11"].source.reason, "history_import");
+    for (const key of Object.keys(original)) assert.deepEqual(data[key], original[key]);
+    const repeated = await request(sender);
+    assert.equal(repeated.added, 0);
+    assert.equal(repeated.skipped, 2);
+    globalThis.chrome.downloads.search = async () => { throw new Error("history unavailable"); };
+    assert.match((await request(sender)).error, /history unavailable/);
   } finally {
     console.log = previousLog;
     console.error = previousError;

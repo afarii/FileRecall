@@ -245,6 +245,17 @@ h1 {
   padding:23px 24px 0
 }
 
+.history-import {
+  margin-bottom:20px
+}
+
+.history-import p {
+  font-size:12px;
+  line-height:1.8;
+  color:var(--muted);
+  margin:10px 0
+}
+
 .history-filters {
   display:flex;
   flex-wrap:wrap;

@@ -35,6 +35,11 @@
       <button id="refresh" class="button secondary" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg><span>刷新记录</span></button>
     </header>
 
+    <section class="history-import" aria-label="导入 Chrome 下载历史">
+      <div class="file-action-buttons"><button id="import-history" class="button secondary" type="button">导入 Chrome 历史</button><button id="import-next" class="button secondary" type="button" hidden>继续导入下一批</button></div>
+      <p>每批最多导入 100 条；已有记录保持不变。历史记录无法恢复过去的点击上下文，来源将标记为未知。</p>
+      <p id="import-status" role="status" aria-live="polite"></p>
+    </section>
     <section class="history-card" aria-label="下载记录">
       <div class="history-search"><label for="history-search">搜索下载历史</label><input id="history-search" type="search" placeholder="文件名、来源域名或页面标题" aria-controls="records"></div>
       <div class="history-filters">

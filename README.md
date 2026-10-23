@@ -25,7 +25,10 @@ installation to retain local history; do not uninstall or clear extension storag
 
 ## Important limits
 
-- History stays in this browser profile, with no cloud sync or import of past downloads. Search and filters only change the view.
+- History stays in this browser profile, with no cloud sync. Use **Import Chrome history** to import up to 100 records per click,
+  then continue with the next batch. Existing records are skipped; failed records can be retried by restarting the import.
+  Imported records have unknown sources because past click context cannot be recovered. Search and filters only change the view.
+  Exceptionally large groups sharing the exact same timestamp stop with an explicit pagination error instead of silently skipping history.
 - Confirmed sources use saved matching evidence. Candidates remain **unconfirmed**; unknown sources are searchable only by filename,
   without inferring a source from download URLs or referrers.
 - File actions require a completed download, its Chrome download record and an accessible local file. FileRecall history survives

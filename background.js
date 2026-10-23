@@ -1,5 +1,6 @@
 import { createContextRecord, matchContext, pruneContexts } from "./context-matcher.mjs";
 import { createDownloadRecordStore } from "./download-record-store.mjs";
+import { importHistoryBatch } from "./history-import.mjs";
 
 let recentContexts = [];
 const downloadRecords = createDownloadRecordStore(chrome.storage.local);
@@ -85,7 +86,16 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   });
 });
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "IMPORT_CHROME_HISTORY") {
+    if (sender?.url !== chrome.runtime.getURL("history.html")) {
+      sendResponse({ error: "请从 FileRecall 历史页主动导入。" });
+      return;
+    }
+    importHistoryBatch(chrome.downloads, downloadRecords, message.cursor ?? null)
+      .then(sendResponse, (error) => sendResponse({ error: error?.message ?? "导入失败，请重试。" }));
+    return true;
+  }
   if (message?.type === "CLICK_CONTEXT") {
     console.log("Click context:", message.context);
     const now = Date.now();
