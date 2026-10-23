@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // A small DOM substitute runs the real page handlers without a browser or dependencies.
 let pageNumber = 0;
-async function historyPage(downloads) {
+async function historyPage(downloads, runtime) {
   const previousDocument = globalThis.document;
   const previousChrome = globalThis.chrome;
   const nodes = new Map();
@@ -47,7 +47,7 @@ async function historyPage(downloads) {
   }]));
   let storageChanged;
   globalThis.document = document;
-  globalThis.chrome = { downloads, storage: {
+  globalThis.chrome = { downloads, runtime, storage: {
     local: { async get() { return structuredClone(data); } },
     onChanged: { addListener(callback) { storageChanged = callback; } },
   } };
@@ -320,4 +320,74 @@ test("filters combine with search and survive refreshes while open details keep 
   assert.match(page.rows()[1].textContent, /file-2.zip/);
   assert.match(page.rows()[2].textContent, /file-1.zip/);
   assert.equal(page.get("history-state").hidden, true);
+});
+
+test("Chrome import is explicit, reports partial results, supports continuation and keeps the current view", async (t) => {
+  const messages = [];
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const cursor = { time: 1_700_000_000_000, ids: [3] };
+  const page = await historyPage(undefined, { async sendMessage(message) {
+    messages.push(message);
+    if (messages.length === 1) {
+      await gate;
+      page.data["download:3"] = { id: 3, filename: "/tmp/imported.zip", state: "complete",
+        startTime: "2026-10-23T10:00:00Z", source: { status: "unknown", reason: "history_import" } };
+      return { added: 1, skipped: 1, failed: 1, errors: ["下载 4：保存失败"], hasMore: true, cursor };
+    }
+    if (messages.length === 2) throw new Error("Chrome history unavailable");
+    if (messages.length === 3) {
+      page.data["download:4"] = { ...page.data["download:3"], id: 4, filename: "/tmp/imported-older.zip",
+        startTime: "2026-10-23T09:00:00Z" };
+      return { added: 1, skipped: 0, failed: 0, errors: [], hasMore: false, cursor: null };
+    }
+    return { added: 0, skipped: 4, failed: 0, errors: [], hasMore: false, cursor: null };
+  } });
+  t.after(page.restore);
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(messages, []);
+  const existing = structuredClone(page.data);
+  page.search("imported");
+  page.filter("source-filter", "unknown");
+  page.filter("download-filter", "complete");
+  page.get("import-history").click();
+  assert.equal(page.get("import-history").disabled, true);
+  assert.equal(page.get("import-next").disabled, true);
+  page.get("import-history").click();
+  assert.equal(messages.length, 1);
+  release();
+  await flush();
+  assert.equal(page.get("import-history").disabled, false);
+  assert.equal(page.get("import-next").hidden, false);
+  assert.match(page.get("import-status").textContent, /新增 1 条，跳过 1 条，失败 1 条/);
+  assert.match(page.get("import-status").textContent, /下载 4：保存失败/);
+  assert.equal(page.rows().length, 1);
+  page.rows()[0].click();
+  const content = page.get("detail-content");
+  content.scrollTop = 250;
+  assert.match(content.textContent, /历史导入.*无法恢复过去的点击上下文/);
+  page.get("import-next").click();
+  await flush();
+  assert.deepEqual(messages[1].cursor, cursor);
+  assert.match(page.get("import-status").textContent, /导入未完成.*Chrome history unavailable/);
+  assert.equal(page.get("import-next").hidden, false);
+  assert.equal(page.get("record-detail").open, true);
+  assert.equal(content.scrollTop, 250);
+  page.get("import-next").click();
+  await flush();
+  assert.deepEqual(messages[2].cursor, cursor);
+  assert.match(page.get("import-status").textContent, /新增 2 条，跳过 1 条，失败 1 条/);
+  assert.equal(page.get("import-next").hidden, true);
+  assert.equal(page.rows().length, 2);
+  assert.match(page.rows()[0].textContent, /imported.zip/);
+  assert.equal(page.get("history-search").value, "imported");
+  assert.equal(page.get("source-filter").value, "unknown");
+  assert.equal(page.get("download-filter").value, "complete");
+  assert.equal(page.get("record-detail").open, true);
+  assert.equal(content.scrollTop, 250);
+  for (const key of Object.keys(existing)) assert.deepEqual(page.data[key], existing[key]);
+  page.get("import-history").click();
+  await flush();
+  assert.equal(messages[3].cursor, null);
+  assert.match(page.get("import-status").textContent, /新增 0 条，跳过 4 条，失败 0 条/);
 });

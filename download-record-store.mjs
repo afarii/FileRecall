@@ -32,8 +32,9 @@ export function createDownloadRecordStore(storage, now = () => new Date().toISOS
     const result = pending.then(async () => {
       try {
         const key = `${DOWNLOAD_RECORD_PREFIX}${id}`;
-        const existing = (await storage.get(key))[key];
-        const record = change(existing, now());
+        const values = await storage.get(key);
+        const existing = values[key];
+        const record = change(existing, now(), Object.hasOwn(values, key));
         if (record !== existing) await storage.set({ [key]: record });
         return record;
       } catch (error) {
@@ -46,6 +47,17 @@ export function createDownloadRecordStore(storage, now = () => new Date().toISOS
   }
 
   return {
+    import(download) {
+      if (!Number.isSafeInteger(download?.id) || download.id < 0) return Promise.reject(new Error("Invalid Chrome download ID"));
+      const initial = createDownloadRecord(download, { status: "unknown", reason: "history_import" }, null);
+      let added = false;
+      return write(download.id, (existing, updatedAt, exists) => {
+        if (exists) return existing;
+        added = true;
+        return { ...initial, updatedAt };
+      }).then(() => added);
+    },
+
     create(download, association) {
       // Snapshot inputs now, before the operation waits for earlier storage writes.
       const initial = createDownloadRecord(download, association, null);

@@ -289,12 +289,51 @@ globalThis.chrome?.downloads?.onErased?.addListener((id) => {
 
 if (globalThis.chrome?.storage?.local) {
   const load = createHistoryLoader(chrome.storage.local, updatePage);
+  let importCursor = null;
+  let importBusy = false;
+  let totals = { added: 0, skipped: 0, failed: 0 };
+  async function importBatch(restart) {
+    if (importBusy) return;
+    importBusy = true;
+    $("import-history").disabled = true;
+    $("import-next").disabled = true;
+    if (restart) {
+      importCursor = null;
+      totals = { added: 0, skipped: 0, failed: 0 };
+    }
+    $("import-status").textContent = "正在导入本批 Chrome 下载历史…";
+    try {
+      const result = await chrome.runtime.sendMessage({ type: "IMPORT_CHROME_HISTORY", cursor: importCursor });
+      if (!result || result.error) throw new Error(result?.error ?? "未收到导入结果，请重新导入。");
+      for (const key of Object.keys(totals)) totals[key] += result[key];
+      importCursor = result.cursor;
+      $("import-next").hidden = !result.hasMore;
+      $("import-status").textContent = `累计新增 ${totals.added} 条，跳过 ${totals.skipped} 条，失败 ${totals.failed} 条。`
+        + (result.hasMore ? "可继续导入下一批。" : "已处理完 Chrome 返回的历史。")
+        + (totals.failed ? "失败记录可重新导入重试，已保存的记录会跳过。" : "")
+        + (result.errors.length ? ` ${result.errors.join("；")}` : "");
+    } catch (error) {
+      $("import-next").hidden = importCursor === null;
+      $("import-status").textContent = `导入未完成：${text(error?.message)}。已保存的记录仍保留，可重试。`
+        + ` 累计已报告新增 ${totals.added} 条，跳过 ${totals.skipped} 条，失败 ${totals.failed} 条。`;
+    } finally {
+      importBusy = false;
+      $("import-history").disabled = false;
+      $("import-history").textContent = "重新导入 Chrome 历史";
+      $("import-next").disabled = false;
+      await load();
+    }
+  }
+  $("import-history").addEventListener("click", () => importBatch(true));
+  $("import-next").addEventListener("click", () => importBatch(false));
   refresh.addEventListener("click", load);
   $("retry").addEventListener("click", load);
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && Object.keys(changes).some((key) => key.startsWith("download:"))) load();
+    // The batch's final load includes both imported records and concurrent live updates.
+    if (!importBusy && area === "local" && Object.keys(changes).some((key) => key.startsWith("download:"))) load();
   });
   load();
 } else {
+  $("import-history").disabled = true;
   updatePage({ status: "error", message: "请通过 FileRecall 扩展入口打开此页面。" });
 }

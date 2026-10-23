@@ -53,7 +53,9 @@ export function sourceView(record) {
     note: incomplete ? "来源关联信息不完整，暂按未知展示。" : {
       matched: "已根据保存的匹配证据关联到点击时的页面。",
       candidate: "以下上下文仅为候选，尚未确认为本次下载的来源。",
-      unknown: "暂无可靠的来源上下文。下载地址和 referrer 仅作为原始信息保留。",
+      unknown: source.reason === "history_import"
+        ? "此记录来自 Chrome 历史导入，无法恢复过去的点击上下文。下载地址和 referrer 仅作为原始信息保留。"
+        : "暂无可靠的来源上下文。下载地址和 referrer 仅作为原始信息保留。",
     }[status],
   };
 }
@@ -100,6 +102,7 @@ export const REASONS = {
   invalid_download_url: "下载地址无法参与匹配",
   invalid_referrer: "referrer 无效",
   creation_event_unavailable: "未收到下载创建事件",
+  history_import: "Chrome 历史导入，无法恢复过去的点击上下文",
   invalid_association: "关联信息不完整",
   unspecified: "未记录关联原因",
 };

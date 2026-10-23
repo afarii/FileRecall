@@ -33,6 +33,24 @@ function memoryStorage(initial = {}, hooks = {}) {
   };
 }
 
+test("history import shares the write queue, preserves live associations and never replaces existing keys", async () => {
+  const storage = memoryStorage({ "download:8": null });
+  const store = createDownloadRecordStore(storage, () => updatedAt);
+  const live = store.create(download(), association());
+  const importing = store.import(download({ filename: "historical.zip" }));
+  await live;
+  const before = structuredClone(storage.data["download:7"]);
+  assert.equal(await importing, false);
+  assert.deepEqual(storage.data["download:7"], before);
+  assert.equal(await store.import(download({ id: 8 })), false);
+  assert.equal(storage.data["download:8"], null);
+  assert.equal(await store.import(download({ id: 9 })), true);
+  await store.update({ id: 9, state: { current: "complete" } });
+  assert.equal(storage.data["download:9"].state, "complete");
+  assert.equal(storage.data["download:9"].source.reason, "history_import");
+  await assert.rejects(store.import(download({ id: "7" })), /Invalid/);
+});
+
 test("creation stores one complete record with separate facts and matched context", async () => {
   const storage = memoryStorage();
   const store = createDownloadRecordStore(storage, () => updatedAt);
