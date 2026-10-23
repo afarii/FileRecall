@@ -753,6 +753,25 @@ body:has(dialog[open]) {
   color:#927b4f
 }
 
+.file-actions {
+  flex:none;
+  padding:16px 24px;
+  border-bottom:1px solid var(--border)
+}
+
+.file-action-buttons {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px
+}
+
+.file-actions p {
+  margin:10px 0 0;
+  font-size:12px;
+  line-height:1.8;
+  color:var(--muted)
+}
+
 .detail-section {
   margin-top:27px;
   padding-top:23px;

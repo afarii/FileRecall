@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // A small DOM substitute runs the real page handlers without a browser or dependencies.
 let pageNumber = 0;
-async function historyPage() {
+async function historyPage(downloads) {
   const previousDocument = globalThis.document;
   const previousChrome = globalThis.chrome;
   const nodes = new Map();
@@ -47,7 +47,7 @@ async function historyPage() {
   }]));
   let storageChanged;
   globalThis.document = document;
-  globalThis.chrome = { storage: {
+  globalThis.chrome = { downloads, storage: {
     local: { async get() { return structuredClone(data); } },
     onChanged: { addListener(callback) { storageChanged = callback; } },
   } };
@@ -132,6 +132,64 @@ test("history drawer resets only its own scroll when opened, preserving refresh 
     assert.equal(page.document.activeElement, page.rows()[0]);
     assertListPosition();
   });
+});
+
+test("detail file buttons query Chrome, stay independent and preserve search, filters and saved history", async (t) => {
+  const calls = [];
+  let exists = true;
+  let missing = false;
+  let changed;
+  let erased;
+  const page = await historyPage({
+    async search({ id }) {
+      calls.push(["search", id]);
+      return missing ? [] : [{ id, exists, state: "complete" }];
+    },
+    show(id) { calls.push(["show", id]); },
+    open(id) { calls.push(["open", id]); return Promise.reject(new Error("access denied")); },
+    onChanged: { addListener(callback) { changed = callback; } },
+    onErased: { addListener(callback) { erased = callback; } },
+  });
+  t.after(page.restore);
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  const before = structuredClone(page.data);
+  page.search("file-2");
+  page.filter("source-filter", "unknown");
+  page.filter("download-filter", "complete");
+  page.rows()[0].click();
+  assert.equal(page.get("show-file").disabled, true);
+  await flush();
+  assert.deepEqual(calls, [["search", 2]]);
+  assert.equal(page.get("show-file").disabled, false);
+  assert.equal(page.get("open-file").disabled, false);
+  page.get("show-file").click();
+  assert.deepEqual(calls.at(-1), ["show", 2]);
+  assert.match(page.get("file-action-status").textContent, /不提供定位结果/);
+  page.get("open-file").click();
+  assert.deepEqual(calls.at(-1), ["open", 2]);
+  await flush();
+  assert.match(page.get("file-action-status").textContent, /操作失败.*access denied/);
+  assert.equal(page.get("open-file").disabled, true);
+  page.get("check-file").click();
+  await flush();
+  assert.equal(page.get("show-file").disabled, false);
+  exists = false;
+  changed({ id: 2, exists: { current: false } });
+  await flush();
+  assert.equal(page.get("show-file").disabled, true);
+  assert.match(page.get("file-action-status").textContent, /移动或删除/);
+  missing = true;
+  erased(2);
+  await flush();
+  assert.match(page.get("file-action-status").textContent, /记录已丢失/);
+  assert.equal(page.rows().length, 1);
+  assert.equal(page.get("record-detail").open, true);
+  assert.equal(page.get("history-search").value, "file-2");
+  assert.equal(page.get("source-filter").value, "unknown");
+  assert.equal(page.get("download-filter").value, "complete");
+  assert.deepEqual(page.data, before);
+  page.get("record-detail").close();
+  assert.equal(page.document.activeElement, page.rows()[0]);
 });
 
 test("history search preserves details, candidate labels, ordering and live updates without writing records", async (t) => {

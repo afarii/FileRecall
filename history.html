@@ -61,6 +61,10 @@
 
   <dialog id="record-detail" aria-labelledby="detail-title">
     <div class="detail-topbar"><span>下载详情</span><form method="dialog"><button class="icon-button" type="submit" aria-label="关闭下载详情"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></form></div>
+    <div class="file-actions">
+      <div class="file-action-buttons"><button id="show-file" class="button secondary" type="button" disabled>在文件夹中显示</button><button id="open-file" class="button secondary" type="button" disabled>打开文件</button><button id="check-file" class="button secondary" type="button">重新检查</button></div>
+      <p id="file-action-status" role="status" aria-live="polite"></p>
+    </div>
     <div id="detail-content" class="detail-content"></div>
   </dialog>
 </body>
