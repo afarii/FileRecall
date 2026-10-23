@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createDownloadRecordStore } from "./download-record-store.mjs";
 
 // A small DOM substitute runs the real page handlers without a browser or dependencies.
 let pageNumber = 0;
@@ -39,6 +40,7 @@ async function historyPage(downloads, runtime) {
     if (!nodes.has(id)) nodes.set(id, new Node());
     return nodes.get(id);
   };
+  document.getElementById("detail-content").append(document.getElementById("detail-record"));
   document.createElement = document.createElementNS = document.createDocumentFragment = () => new Node();
   document.createTextNode = (value) => { const node = new Node(); node.textContent = value; return node; };
   const data = Object.fromEntries([1, 2].map((id) => [`download:${id}`, {
@@ -390,4 +392,153 @@ test("Chrome import is explicit, reports partial results, supports continuation 
   await flush();
   assert.equal(messages[3].cursor, null);
   assert.match(page.get("import-status").textContent, /新增 0 条，跳过 4 条，失败 0 条/);
+});
+
+test("detail annotations update labels, search and filters while keeping original evidence and drafts", async (t) => {
+  let store;
+  const page = await historyPage(undefined, { async sendMessage(message) {
+    assert.equal(message.type, "ANNOTATE_DOWNLOAD");
+    try {
+      await store.annotate(message.id, message.change);
+      return { saved: true };
+    } catch (error) { return { error: error.message }; }
+  } });
+  t.after(page.restore);
+  store = createDownloadRecordStore({
+    async get(key) { return Object.hasOwn(page.data, key) ? { [key]: structuredClone(page.data[key]) } : {}; },
+    async set(values) { Object.assign(page.data, structuredClone(values)); },
+  });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  const input = (id, value) => { page.get(id).value = value; page.get(id).listeners.input(); };
+  page.data["download:2"].source = { status: "candidate", reason: "page_and_time", candidate: {
+    pageUrl: "https://possible.example/", pageTitle: "Possible page", clickedText: "Download",
+  }, evidence: { pageMatch: "exact" } };
+  const original = structuredClone(page.data["download:2"].source);
+  await page.update();
+  assert.equal(page.get("record-detail").open, false);
+  assert.equal(page.get("record-detail").modalOpenCount, 0);
+  page.filter("source-filter", "candidate");
+  page.rows()[0].click();
+  assert.equal(page.get("annotation-editor").open, false);
+  page.get("annotation-editor").open = true;
+  assert.equal(page.get("confirm-source").hidden, false);
+  input("record-note", "Draft reminder");
+  page.get("detail-content").scrollTop = 240;
+  await page.update();
+  assert.equal(page.get("record-note").value, "Draft reminder");
+  assert.equal(page.get("annotation-editor").open, true);
+  page.get("confirm-source").click();
+  assert.equal(page.get("confirm-source").disabled, true);
+  await flush();
+  assert.equal(page.data["download:2"].userSource.type, "confirmed_candidate");
+  assert.deepEqual(page.data["download:2"].source, original);
+  assert.equal(page.rows().length, 0);
+  assert.equal(page.get("record-detail").open, true);
+  assert.equal(page.get("detail-content").scrollTop, 240);
+  assert.match(page.get("detail-content").textContent, /人工确认候选/);
+  assert.match(page.get("detail-content").textContent, /原始算法关联状态候选 · 未确认/);
+  assert.equal(page.get("record-note").value, "Draft reminder");
+  page.get("save-note").click();
+  await flush();
+  assert.equal(page.data["download:2"].note, "Draft reminder");
+  page.filter("source-filter", "confirmed");
+  page.search("REMINDER");
+  assert.equal(page.rows().length, 1);
+  page.get("undo-source").click();
+  await flush();
+  assert.equal(page.data["download:2"].userSource, null);
+  assert.equal(page.rows().length, 0);
+  page.get("reject-source").click();
+  await flush();
+  assert.equal(page.data["download:2"].userSource.type, "rejected_candidate");
+  assert.equal(page.get("manual-source-fields").hidden, false);
+  page.filter("source-filter", "rejected");
+  page.search("possible.example");
+  assert.equal(page.rows().length, 0);
+  input("manual-page-url", "javascript:alert(1)");
+  input("manual-page-title", "Title");
+  page.get("save-source").click();
+  await flush();
+  assert.match(page.get("annotation-status").textContent, /保存失败/);
+  assert.equal(page.get("manual-page-url").value, "javascript:alert(1)");
+  assert.equal(page.data["download:2"].userSource.type, "rejected_candidate");
+  const hostile = '<img src=x onerror="alert(1)">';
+  input("manual-page-url", "https://manual.example/page");
+  input("manual-page-title", hostile);
+  page.get("save-source").click();
+  await flush();
+  assert.match(page.get("annotation-status").textContent, /已保存/);
+  assert.equal(page.data["download:2"].userSource.type, "manual");
+  assert.ok(page.get("detail-content").textContent.includes(hostile));
+  page.filter("source-filter", "manual");
+  page.search("MANUAL.EXAMPLE");
+  assert.equal(page.rows().length, 1);
+  input("manual-page-url", "https://edited.example/");
+  page.get("save-source").click();
+  await flush();
+  assert.equal(page.rows().length, 0);
+  page.get("undo-source").click();
+  await flush();
+  assert.equal(page.data["download:2"].userSource, null);
+  assert.deepEqual(page.data["download:2"].source, original);
+  input("record-note", "");
+  page.get("save-note").click();
+  await flush();
+  assert.equal(page.data["download:2"].note, "");
+
+  page.get("record-detail").close();
+  page.search("file-1");
+  page.filter("source-filter", "unknown");
+  page.rows()[0].click();
+  assert.equal(page.get("manual-source-fields").hidden, false);
+  assert.equal(page.get("confirm-source").hidden, true);
+  input("manual-page-url", "https://known.example/");
+  input("manual-page-title", "");
+  await store.update({ id: 1, state: { current: "interrupted" } });
+  await page.update();
+  assert.equal(page.get("manual-page-url").value, "https://known.example/");
+  page.get("save-source").click();
+  await flush();
+  assert.equal(page.data["download:1"].state, "interrupted");
+  assert.equal(page.data["download:1"].source.status, "unknown");
+  assert.equal(page.data["download:1"].userSource.type, "manual");
+});
+
+test("failed saves retain drafts and edits made while saving are not discarded by live refresh", async (t) => {
+  let fail = true;
+  let release;
+  let store;
+  const page = await historyPage(undefined, { async sendMessage(message) {
+    if (fail) return { error: "storage unavailable" };
+    await new Promise((resolve) => { release = resolve; });
+    await store.annotate(message.id, message.change);
+    return { saved: true };
+  } });
+  t.after(page.restore);
+  store = createDownloadRecordStore({
+    async get(key) { return { [key]: structuredClone(page.data[key]) }; },
+    async set(values) { Object.assign(page.data, structuredClone(values)); },
+  });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  page.rows()[0].click();
+  const note = page.get("record-note");
+  note.value = "First draft";
+  note.listeners.input();
+  page.get("save-note").click();
+  await flush();
+  assert.match(page.get("annotation-status").textContent, /保存失败.*storage unavailable/);
+  assert.equal(note.value, "First draft");
+  assert.equal(page.get("save-note").disabled, false);
+  assert.equal(page.data["download:2"].note, undefined);
+  fail = false;
+  page.get("save-note").click();
+  note.value = "Second draft";
+  note.listeners.input();
+  await page.update();
+  assert.equal(note.value, "Second draft");
+  release();
+  await flush();
+  assert.equal(page.data["download:2"].note, "First draft");
+  assert.equal(note.value, "Second draft");
+  assert.equal(page.get("save-note").disabled, false);
 });

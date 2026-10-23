@@ -30,7 +30,7 @@ a {
   color:var(--accent)
 }
 
-button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visible {
+button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible {
   outline:3px solid #65aa91;
   outline-offset:4px
 }
@@ -787,6 +787,54 @@ body:has(dialog[open]) {
   margin-top:27px;
   padding-top:23px;
   border-top:1px solid #edf1ee
+}
+
+.badge.confirmed,.badge.manual {
+  background:#eef4fb;
+  color:#476c91
+}
+
+.badge.rejected {
+  background:#f3f3f3;
+  color:#737b76
+}
+
+.annotation-editor {
+  margin-top:24px;
+  padding-top:18px;
+  border-top:1px solid var(--border);
+  font-size:12px;
+  line-height:1.8
+}
+
+.annotation-editor summary {
+  cursor:pointer;
+  color:var(--accent)
+}
+
+.annotation-editor p {
+  color:var(--muted)
+}
+
+.annotation-editor label {
+  display:block;
+  margin-top:14px
+}
+
+.annotation-editor input,.annotation-editor textarea {
+  display:block;
+  width:100%;
+  margin:6px 0 10px;
+  padding:9px;
+  border:1px solid var(--border);
+  border-radius:6px;
+  font:inherit;
+  color:inherit;
+  background:#f7f9f8
+}
+
+.annotation-editor textarea {
+  resize:vertical
 }
 
 .detail-section h3 {
