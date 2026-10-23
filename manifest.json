@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FileRecall",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "permissions": ["downloads", "downloads.open", "tabs", "storage"],
   "action": {
     "default_title": "打开 FileRecall 下载历史"
