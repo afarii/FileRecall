@@ -8,6 +8,8 @@ function formatSize(bytes: number) {
 
 export default function App() {
   const [folders, setFolders] = useState<Array<{ path: string }>>([]);
+  const [historyFolders, setHistoryFolders] = useState<Array<{ path: string; count: number }>>([]);
+  const [clearingFolder, setClearingFolder] = useState<string | null>(null);
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [query, setQuery] = useState("");
   const currentQuery = useRef(query);
@@ -19,13 +21,15 @@ export default function App() {
 
   const reload = useCallback(async (search: string) => {
     const version = ++reloadVersion.current;
-    const [nextFiles, nextFolders] = await Promise.all([
+    const [nextFiles, nextFolders, nextHistoryFolders] = await Promise.all([
       window.fileRecall.search(search),
       window.fileRecall.folders(),
+      window.fileRecall.historyFolders(),
     ]);
     if (version !== reloadVersion.current || search !== currentQuery.current) return;
     setFiles(nextFiles);
     setFolders(nextFolders);
+    setHistoryFolders(nextHistoryFolders);
   }, []);
 
   useEffect(() => {
@@ -88,6 +92,22 @@ export default function App() {
 
   const missingCount = files.filter((file) => file.status === "missing").length;
 
+  async function clearHistory() {
+    if (!clearingFolder) return;
+    setBusy(true);
+    setError("");
+    try {
+      const removed = await window.fileRecall.clearHistory(clearingFolder);
+      setClearingFolder(null);
+      setNotice(`已清除 ${removed} 条历史记录，磁盘文件保留。`);
+      await reload(currentQuery.current);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -103,6 +123,14 @@ export default function App() {
           folders.map((folder) => <div key={folder.path}>
             <div className="folder" title={folder.path}>▣ &nbsp; {folder.path}</div>
             <button className="stop-indexing" disabled={busy} onClick={() => removeFolder(folder.path)} aria-label={`停止索引 ${folder.path}`}>停止索引</button>
+            <button className="stop-indexing" disabled={busy} onClick={() => setClearingFolder(folder.path)} aria-label={`停止并清除历史 ${folder.path}`}>停止并清除历史</button>
+          </div>)}
+        {historyFolders.some((history) => !folders.some((folder) => folder.path === history.path)) &&
+          <div className="section-label with-gap">已停止索引的历史</div>}
+        {historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path)).map((history) =>
+          <div key={history.path}>
+            <div className="folder" title={history.path}>{history.path}</div>
+            <button className="stop-indexing" disabled={busy} onClick={() => setClearingFolder(history.path)} aria-label={`清除历史 ${history.path}`}>清除历史（{history.count} 条）</button>
           </div>)}
         <div className="sidebar-bottom">仅扫描你主动选择的目录<br />默认不上传文件信息</div>
       </aside>
@@ -118,6 +146,11 @@ export default function App() {
           </div>
           <div className="search"><span>⌕</span><input aria-label="搜索文件名或路径" placeholder="搜索文件名、路径…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
           {error && <div className="alert error" role="alert">{error}</div>}
+          {clearingFolder && <div className="clear-history" role="dialog" aria-label="清除目录历史">
+            <p>清除 {clearingFolder} 及其子目录的全部 FileRecall 历史，并停止这些目录的索引。磁盘文件保留。</p>
+            <button disabled={busy} onClick={clearHistory}>确认清除历史</button>
+            <button className="secondary" disabled={busy} onClick={() => setClearingFolder(null)}>取消</button>
+          </div>}
           {busy ? <div className="alert">正在扫描文件夹，请保持应用开启…</div> : <div className="alert">{notice}</div>}
           <div className="summary"><div><strong>{files.length}</strong><span>条结果（最多显示 500 条）</span></div><div><strong>{missingCount}</strong><span>个已丢失文件（当前结果中）</span></div></div>
           <div className="result-header"><span>文件</span><span>大小</span><span>状态</span><span>操作</span></div>

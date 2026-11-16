@@ -198,3 +198,61 @@ test("stopping a root preserves history and requires reauthorization to scan", a
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test("clearing directory history removes active and missing records while preserving files and siblings", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "filerecall-"));
+  const folder = join(workspace, "files");
+  const nested = join(folder, "nested");
+  const sibling = join(workspace, "files-other");
+  const database = join(workspace, "index.sqlite");
+  let index = new FileIndex(database);
+  try {
+    await mkdir(nested, { recursive: true });
+    await mkdir(sibling);
+    await writeFile(join(nested, "present.txt"), "preserve disk file");
+    await writeFile(join(folder, "missing.txt"), "history");
+    await writeFile(join(sibling, "other.txt"), "other");
+    await index.addRoot(folder);
+    await index.addRoot(nested);
+    await index.addRoot(sibling);
+    await unlink(join(folder, "missing.txt"));
+    await index.scan(folder);
+    assert.equal(index.clearHistory(folder), 2);
+    assert.equal(index.clearHistory(folder), 0);
+    assert.deepEqual(index.roots().map((root) => root.path), [sibling]);
+    assert.deepEqual(index.search().map((file) => file.name), ["other.txt"]);
+    assert.equal(await require("node:fs/promises").readFile(join(nested, "present.txt"), "utf8"), "preserve disk file");
+    index.close();
+    index = new FileIndex(database);
+    assert.equal(index.historyRoots().length, 1);
+    await assert.rejects(index.scan(folder), /授权/);
+  } finally {
+    index.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("history clearing rolls back on failure and prevents reindexing by an authorized parent", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "filerecall-"));
+  const folder = join(workspace, "files");
+  const nested = join(folder, "nested");
+  const index = new FileIndex(join(workspace, "index.sqlite"));
+  try {
+    await mkdir(nested, { recursive: true });
+    await writeFile(join(nested, "file.txt"), "hello");
+    await index.addRoot(folder);
+    assert.throws(() => index.clearHistory(nested), /父目录/);
+    index.db.exec(`CREATE TRIGGER fail_delete BEFORE DELETE ON files
+      BEGIN SELECT RAISE(ABORT, 'simulated delete failure'); END;`);
+    assert.throws(() => index.clearHistory(folder), /simulated delete failure/);
+    assert.equal(index.roots().length, 1);
+    assert.equal(index.search().length, 1);
+    index.db.exec("DROP TRIGGER fail_delete");
+    index.removeRoot(folder);
+    assert.equal(index.historyRoots()[0].count, 1);
+    assert.equal(index.clearHistory(folder), 1);
+  } finally {
+    index.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

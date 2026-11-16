@@ -41,6 +41,37 @@ class FileIndex {
     this.db.prepare("DELETE FROM roots WHERE path = ?").run(resolve(rawPath));
   }
 
+  historyRoots() {
+    return this.db.prepare(`
+      SELECT root_path AS path, COUNT(*) AS count FROM files GROUP BY root_path ORDER BY root_path
+    `).all();
+  }
+
+  clearHistory(rawPath) {
+    if (typeof rawPath !== "string" || !isAbsolute(rawPath)) {
+      throw new Error("请选择有效的绝对目录路径。");
+    }
+    const folder = resolve(rawPath);
+    const prefix = folder.endsWith(sep) ? folder : folder + sep;
+    const parent = this.roots().find((root) => {
+      const parentPrefix = root.path.endsWith(sep) ? root.path : root.path + sep;
+      return folder.startsWith(parentPrefix);
+    });
+    if (parent) throw new Error(`请先停止父目录 ${parent.path} 的索引，再清除该目录历史，避免自动重新建立记录。`);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("DELETE FROM roots WHERE path = ? OR substr(path, 1, length(?)) = ?")
+        .run(folder, prefix, prefix);
+      const result = this.db.prepare("DELETE FROM files WHERE substr(path, 1, length(?)) = ?")
+        .run(prefix, prefix);
+      this.db.exec("COMMIT");
+      return Number(result.changes);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   async addRoot(rawPath) {
     if (typeof rawPath !== "string" || !isAbsolute(rawPath)) {
       throw new Error("请选择有效的绝对目录路径。");

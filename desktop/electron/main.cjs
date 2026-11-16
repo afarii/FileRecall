@@ -57,6 +57,8 @@ app.whenReady().then(() => {
   index = new FileIndex(join(app.getPath("userData"), "files.sqlite"));
 
   ipcMain.handle("folders:list", () => index.roots());
+  ipcMain.handle("history:folders", () => index.historyRoots());
+  ipcMain.handle("history:clear", (_event, path) => guardedScan(() => index.clearHistory(path)));
   ipcMain.handle("folders:remove", (_event, path) => guardedScan(() => index.removeRoot(path)));
   ipcMain.handle("folders:add", async () => {
     const result = await dialog.showOpenDialog(window, {
