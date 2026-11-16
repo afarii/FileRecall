@@ -1,0 +1,110 @@
+import { useCallback, useEffect, useState } from "react";
+
+function formatSize(bytes: number) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+export default function App() {
+  const [folders, setFolders] = useState<Array<{ path: string }>>([]);
+  const [files, setFiles] = useState<FileRecord[]>([]);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("文件索引仅保存在本机。");
+  const [error, setError] = useState("");
+
+  const reload = useCallback(async (search: string) => {
+    const [nextFiles, nextFolders] = await Promise.all([
+      window.fileRecall.search(search),
+      window.fileRecall.folders(),
+    ]);
+    setFiles(nextFiles);
+    setFolders(nextFolders);
+  }, []);
+
+  useEffect(() => {
+    reload(query).catch((err) => setError(String(err)));
+  }, [reload, query]);
+
+  async function perform(action: () => Promise<ScanResult | ScanResult[] | null>) {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await action();
+      if (!result) return;
+      const scans = Array.isArray(result) ? result : [result];
+      const totals = scans.reduce(
+        (sum, scan) => ({
+          indexed: sum.indexed + (scan.indexed ?? 0),
+          missing: sum.missing + (scan.missing ?? 0),
+          skipped: sum.skipped + (scan.skipped ?? 0),
+        }),
+        { indexed: 0, missing: 0, skipped: 0 },
+      );
+      const problems = scans.filter((scan) => !scan.complete);
+      setNotice(`已索引 ${totals.indexed} 个文件；新增丢失记录 ${totals.missing} 个。` +
+        (problems.length ? ` ${problems.length} 个目录扫描不完整，暂缓判定其中的文件丢失。` : ""));
+      await reload(query);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reveal(path: string) {
+    setError("");
+    try {
+      const result = await window.fileRecall.reveal(path);
+      if (!result.ok) setError(result.message ?? "无法定位文件。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  const missingCount = files.filter((file) => file.status === "missing").length;
+
+  return (
+    <div className="app">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">F</div>
+          <div><strong>FileRecall</strong><small>Desktop · v0.4 MVP</small></div>
+        </div>
+        <div className="section-label">文件来源</div>
+        <div className="nav-item active">▦ &nbsp; 本地文件记忆</div>
+        <div className="nav-item muted">↗ &nbsp; 浏览器来源（后续同步）</div>
+        <div className="section-label with-gap">已授权目录</div>
+        {folders.length === 0 ? <p className="sidebar-note">尚未选择扫描目录</p> :
+          folders.map((folder) => <div className="folder" key={folder.path} title={folder.path}>▣ &nbsp; {folder.path}</div>)}
+        <div className="sidebar-bottom">仅扫描你主动选择的目录<br />默认不上传文件信息</div>
+      </aside>
+      <main>
+        <header className="topbar"><span>文件记忆库</span><span className="local-label">● &nbsp; 本地存储</span></header>
+        <div className="content">
+          <div className="heading-row">
+            <div><h1>找回你的文件</h1><p>即使文件已经删除，历史记录仍然保留。</p></div>
+            <div className="actions">
+              <button className="secondary" disabled={busy || folders.length === 0} onClick={() => perform(() => window.fileRecall.rescan())}>重新扫描</button>
+              <button disabled={busy} onClick={() => perform(() => window.fileRecall.addFolder())}>+ 添加文件夹</button>
+            </div>
+          </div>
+          <div className="search"><span>⌕</span><input aria-label="搜索文件名或路径" placeholder="搜索文件名、路径…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
+          {error && <div className="alert error" role="alert">{error}</div>}
+          {busy ? <div className="alert">正在扫描文件夹，请保持应用开启…</div> : <div className="alert">{notice}</div>}
+          <div className="summary"><div><strong>{files.length}</strong><span>条结果（最多显示 500 条）</span></div><div><strong>{missingCount}</strong><span>个已丢失文件</span></div></div>
+          <div className="result-header"><span>文件</span><span>大小</span><span>状态</span><span>操作</span></div>
+          {files.length === 0 ? <div className="empty">{folders.length === 0 ? "添加一个文件夹，开始建立你的本地文件记忆。" : "没有找到匹配的文件。"}</div> :
+            files.map((file) => <div className="result-row" key={file.path}>
+              <div className="file-info"><span className="file-icon">▤</span><div><strong title={file.path}>{file.name}</strong><small title={file.path}>{file.path}</small></div></div>
+              <span className="size">{formatSize(file.size)}</span>
+              <span className={file.status === "present" ? "pill present" : "pill missing"}>{file.status === "present" ? "存在" : "已丢失"}</span>
+              <button className="link-button" disabled={file.status === "missing"} onClick={() => reveal(file.path)}>在文件夹中显示</button>
+            </div>)}
+          <p className="footer-note">本阶段支持文件索引与历史保留。重命名识别、来源重新获取、AI 语义搜索将在后续版本加入。</p>
+        </div>
+      </main>
+    </div>
+  );
+}
