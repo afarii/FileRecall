@@ -21,6 +21,7 @@ interface ScanResult {
 interface Window {
   fileRecall: {
     folders(): Promise<Array<{ path: string; addedAt: number }>>;
+    removeFolder(path: string): Promise<void>;
     addFolder(): Promise<ScanResult | null>;
     rescan(): Promise<ScanResult[]>;
     search(query: string): Promise<FileRecord[]>;

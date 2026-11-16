@@ -1,8 +1,8 @@
 "use strict";
 
 const { randomUUID } = require("node:crypto");
-const { readdir, lstat } = require("node:fs/promises");
-const { basename, isAbsolute, join, resolve } = require("node:path");
+const fs = require("node:fs/promises");
+const { basename, isAbsolute, join, resolve, sep } = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 
 class FileIndex {
@@ -34,12 +34,19 @@ class FileIndex {
     return this.db.prepare("SELECT path, added_at AS addedAt FROM roots ORDER BY path").all();
   }
 
+  removeRoot(rawPath) {
+    if (typeof rawPath !== "string" || !isAbsolute(rawPath)) {
+      throw new Error("请选择有效的绝对目录路径。");
+    }
+    this.db.prepare("DELETE FROM roots WHERE path = ?").run(resolve(rawPath));
+  }
+
   async addRoot(rawPath) {
     if (typeof rawPath !== "string" || !isAbsolute(rawPath)) {
       throw new Error("请选择有效的绝对目录路径。");
     }
     const folder = resolve(rawPath);
-    const info = await lstat(folder);
+    const info = await fs.lstat(folder);
     if (!info.isDirectory() || info.isSymbolicLink()) {
       throw new Error("仅支持普通文件夹。");
     }
@@ -52,8 +59,8 @@ class FileIndex {
     if (!this.db.prepare("SELECT 1 FROM roots WHERE path = ?").get(folder)) {
       throw new Error("文件夹尚未获得授权。");
     }
-    const info = await lstat(folder);
-    if (!info.isDirectory()) throw new Error("扫描目录已不存在或无法访问。");
+    const info = await fs.lstat(folder);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("扫描目录已不存在或无法访问。");
 
     const token = randomUUID();
     const now = Date.now();
@@ -77,7 +84,12 @@ class FileIndex {
       const dir = stack.pop();
       let entries;
       try {
-        entries = await readdir(dir, { withFileTypes: true });
+        const info = await fs.lstat(dir);
+        if (!info.isDirectory() || info.isSymbolicLink()) {
+          skipped++;
+          continue;
+        }
+        entries = await fs.readdir(dir, { withFileTypes: true });
       } catch {
         skipped++;
         continue;
@@ -91,17 +103,20 @@ class FileIndex {
         if (entry.isDirectory()) {
           stack.push(full);
         } else if (entry.isFile()) {
+          let info;
           try {
-            const info = await lstat(full);
+            info = await fs.lstat(full);
             if (!info.isFile()) {
               skipped++;
               continue;
             }
-            upsert.run(full, folder, basename(full), info.size, info.mtimeMs, now, now, token);
-            indexed++;
           } catch {
             skipped++;
+            continue;
           }
+          // Database failures must reach the caller and prevent missing-file updates.
+          upsert.run(full, folder, basename(full), info.size, info.mtimeMs, now, now, token);
+          indexed++;
         }
       }
     }
@@ -109,10 +124,11 @@ class FileIndex {
     // A partial scan must never falsely classify an unreadable subtree as deleted.
     let missing = 0;
     if (skipped === 0) {
+      const prefix = folder.endsWith(sep) ? folder : folder + sep;
       const result = this.db.prepare(`
         UPDATE files SET status = 'missing'
-        WHERE root_path = ? AND scan_token <> ? AND status = 'present'
-      `).run(folder, token);
+        WHERE substr(path, 1, length(?)) = ? AND scan_token <> ? AND status = 'present'
+      `).run(prefix, prefix, token);
       missing = Number(result.changes);
     }
     return { folder, indexed, skipped, missing, complete: skipped === 0 };

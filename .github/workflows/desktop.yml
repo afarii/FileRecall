@@ -21,7 +21,7 @@ jobs:
           node-version: "24"
       - name: Install dependencies
         working-directory: desktop
-        run: npm install
+        run: npm ci
       - name: Run unit tests
         working-directory: desktop
         run: npm test

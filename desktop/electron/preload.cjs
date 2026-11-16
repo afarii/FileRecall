@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   folders: () => ipcRenderer.invoke("folders:list"),
+  removeFolder: (path) => ipcRenderer.invoke("folders:remove", path),
   addFolder: () => ipcRenderer.invoke("folders:add"),
   rescan: () => ipcRenderer.invoke("folders:rescan"),
   search: (query) => ipcRenderer.invoke("files:search", query),

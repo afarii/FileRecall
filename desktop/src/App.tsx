@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 function formatSize(bytes: number) {
   if (bytes < 1024) return bytes + " B";
@@ -10,15 +10,20 @@ export default function App() {
   const [folders, setFolders] = useState<Array<{ path: string }>>([]);
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [query, setQuery] = useState("");
+  const currentQuery = useRef(query);
+  currentQuery.current = query;
+  const reloadVersion = useRef(0);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("文件索引仅保存在本机。");
   const [error, setError] = useState("");
 
   const reload = useCallback(async (search: string) => {
+    const version = ++reloadVersion.current;
     const [nextFiles, nextFolders] = await Promise.all([
       window.fileRecall.search(search),
       window.fileRecall.folders(),
     ]);
+    if (version !== reloadVersion.current || search !== currentQuery.current) return;
     setFiles(nextFiles);
     setFolders(nextFolders);
   }, []);
@@ -43,9 +48,13 @@ export default function App() {
         { indexed: 0, missing: 0, skipped: 0 },
       );
       const problems = scans.filter((scan) => !scan.complete);
+      const failures = problems.filter((scan) => scan.error);
+      if (failures.length) {
+        setError(failures.map((scan) => `${scan.folder}：${scan.error}`).join("\n"));
+      }
       setNotice(`已索引 ${totals.indexed} 个文件；新增丢失记录 ${totals.missing} 个。` +
         (problems.length ? ` ${problems.length} 个目录扫描不完整，暂缓判定其中的文件丢失。` : ""));
-      await reload(query);
+      await reload(currentQuery.current);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -63,6 +72,20 @@ export default function App() {
     }
   }
 
+  async function removeFolder(path: string) {
+    setBusy(true);
+    setError("");
+    try {
+      await window.fileRecall.removeFolder(path);
+      setNotice(`已停止索引 ${path}，历史记录仍可搜索。`);
+      await reload(currentQuery.current);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const missingCount = files.filter((file) => file.status === "missing").length;
 
   return (
@@ -77,7 +100,10 @@ export default function App() {
         <div className="nav-item muted">↗ &nbsp; 浏览器来源（后续同步）</div>
         <div className="section-label with-gap">已授权目录</div>
         {folders.length === 0 ? <p className="sidebar-note">尚未选择扫描目录</p> :
-          folders.map((folder) => <div className="folder" key={folder.path} title={folder.path}>▣ &nbsp; {folder.path}</div>)}
+          folders.map((folder) => <div key={folder.path}>
+            <div className="folder" title={folder.path}>▣ &nbsp; {folder.path}</div>
+            <button className="stop-indexing" disabled={busy} onClick={() => removeFolder(folder.path)} aria-label={`停止索引 ${folder.path}`}>停止索引</button>
+          </div>)}
         <div className="sidebar-bottom">仅扫描你主动选择的目录<br />默认不上传文件信息</div>
       </aside>
       <main>

@@ -5,9 +5,9 @@
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on tcp:127.0.0.1:5173 && cross-env FILERECALL_DEV_SERVER=http://127.0.0.1:5173 electron .\"",
+    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on tcp:127.0.0.1:5173 && cross-env FILERECALL_DEV_SERVER=http://127.0.0.1:5173 node electron/launch.cjs\"",
     "build": "tsc --noEmit && vite build",
-    "start": "electron .",
+    "start": "node electron/launch.cjs",
     "test": "node --test electron/*.test.cjs"
   },
   "engines": {

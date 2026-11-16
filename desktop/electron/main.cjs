@@ -8,6 +8,14 @@ const { FileIndex } = require("./indexer.cjs");
 let window;
 let index;
 let scanning = false;
+let quitAfterScan = false;
+
+const ownsLock = app.requestSingleInstanceLock();
+if (!ownsLock) app.quit();
+app.on("second-instance", () => {
+  if (window?.isMinimized()) window.restore();
+  window?.focus();
+});
 
 async function guardedScan(action) {
   if (scanning) throw new Error("正在扫描文件，请稍后重试。");
@@ -16,6 +24,7 @@ async function guardedScan(action) {
     return await action();
   } finally {
     scanning = false;
+    if (quitAfterScan) app.quit();
   }
 }
 
@@ -44,9 +53,11 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (!ownsLock) return;
   index = new FileIndex(join(app.getPath("userData"), "files.sqlite"));
 
   ipcMain.handle("folders:list", () => index.roots());
+  ipcMain.handle("folders:remove", (_event, path) => guardedScan(() => index.removeRoot(path)));
   ipcMain.handle("folders:add", async () => {
     const result = await dialog.showOpenDialog(window, {
       title: "选择要索引的文件夹",
@@ -81,10 +92,21 @@ app.whenReady().then(() => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+}).catch((error) => {
+  dialog.showErrorBox("FileRecall 启动失败", String(error.message || error));
+  app.quit();
 });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => index?.close());
+app.on("before-quit", (event) => {
+  if (scanning) {
+    event.preventDefault();
+    quitAfterScan = true;
+    return;
+  }
+  index?.close();
+  index = undefined;
+});
