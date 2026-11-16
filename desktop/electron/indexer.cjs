@@ -85,7 +85,7 @@ class FileIndex {
       for (const entry of entries) {
         const full = join(dir, entry.name);
         if (entry.isSymbolicLink()) {
-          skipped++;
+          // Links are intentionally outside the scan scope, not a scan failure.
           continue;
         }
         if (entry.isDirectory()) {
