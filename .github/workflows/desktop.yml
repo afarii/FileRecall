@@ -1,0 +1,30 @@
+name: Desktop MVP
+on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  push:
+    branches:
+      - "feat/desktop-v0.4-mvp"
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm install
+      - name: Run unit tests
+        working-directory: desktop
+        run: npm test
+      - name: Build renderer
+        working-directory: desktop
+        run: npm run build
