@@ -119,7 +119,7 @@ export default function App() {
           <div className="search"><span>⌕</span><input aria-label="搜索文件名或路径" placeholder="搜索文件名、路径…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
           {error && <div className="alert error" role="alert">{error}</div>}
           {busy ? <div className="alert">正在扫描文件夹，请保持应用开启…</div> : <div className="alert">{notice}</div>}
-          <div className="summary"><div><strong>{files.length}</strong><span>条结果（最多显示 500 条）</span></div><div><strong>{missingCount}</strong><span>个已丢失文件</span></div></div>
+          <div className="summary"><div><strong>{files.length}</strong><span>条结果（最多显示 500 条）</span></div><div><strong>{missingCount}</strong><span>个已丢失文件（当前结果中）</span></div></div>
           <div className="result-header"><span>文件</span><span>大小</span><span>状态</span><span>操作</span></div>
           {files.length === 0 ? <div className="empty">{folders.length === 0 ? "添加一个文件夹，开始建立你的本地文件记忆。" : "没有找到匹配的文件。"}</div> :
             files.map((file) => <div className="result-row" key={file.path}>
