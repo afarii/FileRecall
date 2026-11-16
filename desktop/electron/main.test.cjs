@@ -6,6 +6,7 @@ const { EventEmitter } = require("node:events");
 const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const vm = require("node:vm");
+const { DirectoryMonitor } = require("./monitor.cjs");
 
 async function startMain(index, ownsLock = true) {
   const app = new EventEmitter();
@@ -23,44 +24,70 @@ async function startMain(index, ownsLock = true) {
     app,
     BrowserWindow: class {
       webContents = new EventEmitter();
-      constructor() { this.webContents.setWindowOpenHandler = () => {}; }
+      constructor() {
+        this.webContents.setWindowOpenHandler = () => {};
+        this.webContents.send = () => {};
+      }
+      isDestroyed() { return false; }
       loadFile() {}
     },
     dialog: { showErrorBox() {} },
     ipcMain: { handle(name, handler) { handlers.set(name, handler); } },
     shell: { showItemInFolder() { throw new Error("Unexpected reveal"); } },
   };
+  let monitor;
   vm.runInNewContext(readFileSync(join(__dirname, "main.cjs"), "utf8"), {
     __dirname, process,
     require(name) {
       if (name === "electron") return electron;
       if (name === "./indexer.cjs") return { FileIndex: function () { return index; } };
+      if (name === "./monitor.cjs") return { DirectoryMonitor: class extends DirectoryMonitor {
+        constructor(index, options) {
+          super(index, { ...options, watchDirectory() {
+            const watcher = new EventEmitter();
+            watcher.close = () => {};
+            return watcher;
+          } });
+          monitor = this;
+        }
+        start() {
+          this.syncRoots();
+          for (const entry of this.entries.values()) clearTimeout(entry.timer);
+        }
+      } };
       return require(name);
     },
   });
   await new Promise((resolve) => setImmediate(resolve));
-  return { app, handlers, isClosed: () => closed };
+  return { app, handlers, monitor, isClosed: () => closed };
 }
 
-test("main serializes rescans and waits before closing SQLite", async () => {
+test("main serializes rescans and waits before closing SQLite", { timeout: 5000 }, async () => {
   let finish;
   let databaseClosed = false;
+  const calls = [];
+  let roots = [{ path: __dirname }];
   const index = {
-    roots: () => [{ path: __dirname }],
-    scan: () => new Promise((resolve) => { finish = resolve; }),
-    close() { databaseClosed = true; },
+    roots: () => roots,
+    scan: () => new Promise((resolve) => { calls.push("scan"); finish = resolve; }),
+    removeRoot() { calls.push("remove"); roots = []; },
+    close() { calls.push("close"); databaseClosed = true; },
   };
   const main = await startMain(index);
   const scan = main.handlers.get("folders:rescan")();
-  await assert.rejects(main.handlers.get("folders:rescan")(), /正在扫描/);
-  await assert.rejects(main.handlers.get("folders:remove")(null, __dirname), /正在扫描/);
+  while (!finish) await new Promise((resolve) => setImmediate(resolve));
+  const remove = main.handlers.get("folders:remove")(null, __dirname);
   main.app.quit();
   assert.equal(main.isClosed(), false);
   assert.equal(databaseClosed, false);
+  await assert.rejects(main.handlers.get("folders:rescan")(), /关闭/);
   finish({ folder: __dirname, complete: true });
   await scan;
+  await remove;
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(main.isClosed(), true);
   assert.equal(databaseClosed, true);
+  assert.deepEqual(calls, ["scan", "remove", "close"]);
 });
 
 test("main reports root failures, allows retry and blocks unindexed file actions", async () => {

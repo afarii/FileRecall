@@ -7,7 +7,7 @@ function formatSize(bytes: number) {
 }
 
 export default function App() {
-  const [folders, setFolders] = useState<Array<{ path: string }>>([]);
+  const [folders, setFolders] = useState<IndexedFolder[]>([]);
   const [historyFolders, setHistoryFolders] = useState<Array<{ path: string; count: number }>>([]);
   const [clearingFolder, setClearingFolder] = useState<string | null>(null);
   const [files, setFiles] = useState<FileRecord[]>([]);
@@ -35,6 +35,10 @@ export default function App() {
   useEffect(() => {
     reload(query).catch((err) => setError(String(err)));
   }, [reload, query]);
+
+  useEffect(() => window.fileRecall.onChanged(() => {
+    reload(currentQuery.current).catch((err) => setError(String(err)));
+  }), [reload]);
 
   async function perform(action: () => Promise<ScanResult | ScanResult[] | null>) {
     setBusy(true);
@@ -122,6 +126,10 @@ export default function App() {
         {folders.length === 0 ? <p className="sidebar-note">尚未选择扫描目录</p> :
           folders.map((folder) => <div key={folder.path}>
             <div className="folder" title={folder.path}>▣ &nbsp; {folder.path}</div>
+            <div className="folder-state" role="status">
+              {{ waiting: "等待扫描", scanning: "正在更新索引", watching: "自动监控中", retrying: "等待自动重试" }[folder.state]}
+              {folder.error && <p>{folder.error}</p>}
+            </div>
             <button className="stop-indexing" disabled={busy} onClick={() => removeFolder(folder.path)} aria-label={`停止索引 ${folder.path}`}>停止索引</button>
             <button className="stop-indexing" disabled={busy} onClick={() => setClearingFolder(folder.path)} aria-label={`停止并清除历史 ${folder.path}`}>停止并清除历史</button>
           </div>)}
@@ -161,7 +169,7 @@ export default function App() {
               <span className={file.status === "present" ? "pill present" : "pill missing"}>{file.status === "present" ? "存在" : "已丢失"}</span>
               <button className="link-button" disabled={file.status === "missing"} onClick={() => reveal(file.path)}>在文件夹中显示</button>
             </div>)}
-          <p className="footer-note">本阶段支持文件索引与历史保留。重命名识别、来源重新获取、AI 语义搜索将在后续版本加入。</p>
+          <p className="footer-note">文件变化自动更新，应用启动时补扫，每 30 秒校验并恢复目录监控。丢失记录保留至手动清除。</p>
         </div>
       </main>
     </div>

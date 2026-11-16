@@ -4,11 +4,13 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { existsSync } = require("node:fs");
 const { join } = require("node:path");
 const { FileIndex } = require("./indexer.cjs");
+const { DirectoryMonitor } = require("./monitor.cjs");
 
 let window;
 let index;
-let scanning = false;
-let quitAfterScan = false;
+let monitor;
+let closing = false;
+let quitReady = false;
 
 const ownsLock = app.requestSingleInstanceLock();
 if (!ownsLock) app.quit();
@@ -17,15 +19,8 @@ app.on("second-instance", () => {
   window?.focus();
 });
 
-async function guardedScan(action) {
-  if (scanning) throw new Error("正在扫描文件，请稍后重试。");
-  scanning = true;
-  try {
-    return await action();
-  } finally {
-    scanning = false;
-    if (quitAfterScan) app.quit();
-  }
+function notifyChanged() {
+  if (window && !window.isDestroyed()) window.webContents.send("library:changed");
 }
 
 function createWindow() {
@@ -55,27 +50,37 @@ function createWindow() {
 app.whenReady().then(() => {
   if (!ownsLock) return;
   index = new FileIndex(join(app.getPath("userData"), "files.sqlite"));
+  monitor = new DirectoryMonitor(index, { onChange: notifyChanged });
 
-  ipcMain.handle("folders:list", () => index.roots());
+  ipcMain.handle("folders:list", () => index.roots().map((root) => ({ ...root, ...monitor.status(root.path) })));
   ipcMain.handle("history:folders", () => index.historyRoots());
-  ipcMain.handle("history:clear", (_event, path) => guardedScan(() => index.clearHistory(path)));
-  ipcMain.handle("folders:remove", (_event, path) => guardedScan(() => index.removeRoot(path)));
+  ipcMain.handle("history:clear", (_event, path) => monitor.run(() => {
+    const removed = index.clearHistory(path);
+    monitor.syncRoots();
+    return removed;
+  }));
+  ipcMain.handle("folders:remove", (_event, path) => monitor.run(() => {
+    index.removeRoot(path);
+    monitor.syncRoots();
+  }));
   ipcMain.handle("folders:add", async () => {
     const result = await dialog.showOpenDialog(window, {
       title: "选择要索引的文件夹",
       properties: ["openDirectory"],
     });
     if (result.canceled || result.filePaths.length === 0) return null;
-    return guardedScan(() => index.addRoot(result.filePaths[0]));
+    return monitor.run(async () => {
+      const scan = await index.addRoot(result.filePaths[0]);
+      monitor.syncRoots();
+      return scan;
+    });
   });
-  ipcMain.handle("folders:rescan", () => guardedScan(async () => {
+  ipcMain.handle("folders:rescan", () => monitor.run(async () => {
+    monitor.syncRoots();
     const results = [];
     for (const root of index.roots()) {
-      try {
-        results.push(await index.scan(root.path));
-      } catch (error) {
-        results.push({ folder: root.path, complete: false, error: String(error.message || error) });
-      }
+      const result = await monitor.scanRoot(root.path);
+      if (result) results.push(result);
     }
     return results;
   }));
@@ -91,6 +96,7 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  monitor.start();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -104,9 +110,16 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  if (scanning) {
+  if (monitor && !quitReady) {
     event.preventDefault();
-    quitAfterScan = true;
+    if (closing) return;
+    closing = true;
+    monitor.close().then(() => {
+      index?.close();
+      index = undefined;
+      quitReady = true;
+      app.quit();
+    });
     return;
   }
   index?.close();

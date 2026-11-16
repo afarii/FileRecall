@@ -9,6 +9,14 @@ interface FileRecord {
   status: "present" | "missing";
 }
 
+interface IndexedFolder {
+  path: string;
+  addedAt: number;
+  state: "waiting" | "scanning" | "watching" | "retrying";
+  error: string;
+  lastScanAt: number | null;
+}
+
 interface ScanResult {
   folder: string;
   indexed?: number;
@@ -20,7 +28,8 @@ interface ScanResult {
 
 interface Window {
   fileRecall: {
-    folders(): Promise<Array<{ path: string; addedAt: number }>>;
+    folders(): Promise<IndexedFolder[]>;
+    onChanged(callback: () => void): () => void;
     historyFolders(): Promise<Array<{ path: string; count: number }>>;
     clearHistory(path: string): Promise<number>;
     removeFolder(path: string): Promise<void>;

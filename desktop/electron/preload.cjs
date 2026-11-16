@@ -11,4 +11,9 @@ contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   rescan: () => ipcRenderer.invoke("folders:rescan"),
   search: (query) => ipcRenderer.invoke("files:search", query),
   reveal: (path) => ipcRenderer.invoke("files:reveal", path),
+  onChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("library:changed", listener);
+    return () => ipcRenderer.removeListener("library:changed", listener);
+  },
 }));

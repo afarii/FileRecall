@@ -7,6 +7,7 @@ const { DatabaseSync } = require("node:sqlite");
 
 class FileIndex {
   constructor(databasePath) {
+    this.databasePath = resolve(databasePath);
     this.db = new DatabaseSync(databasePath);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
@@ -34,6 +35,13 @@ class FileIndex {
     return this.db.prepare("SELECT path, added_at AS addedAt FROM roots ORDER BY path").all();
   }
 
+  isInternalPath(path) {
+    const full = resolve(path);
+    const internal = [this.databasePath, this.databasePath + "-wal", this.databasePath + "-shm"];
+    return internal.some((candidate) => process.platform === "win32"
+      ? candidate.toLowerCase() === full.toLowerCase() : candidate === full);
+  }
+
   removeRoot(rawPath) {
     if (typeof rawPath !== "string" || !isAbsolute(rawPath)) {
       throw new Error("请选择有效的绝对目录路径。");
@@ -55,14 +63,16 @@ class FileIndex {
     const prefix = folder.endsWith(sep) ? folder : folder + sep;
     const parent = this.roots().find((root) => {
       const parentPrefix = root.path.endsWith(sep) ? root.path : root.path + sep;
-      return folder.startsWith(parentPrefix);
+      return process.platform === "win32"
+        ? folder.toLowerCase().startsWith(parentPrefix.toLowerCase()) : folder.startsWith(parentPrefix);
     });
     if (parent) throw new Error(`请先停止父目录 ${parent.path} 的索引，再清除该目录历史，避免自动重新建立记录。`);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("DELETE FROM roots WHERE path = ? OR substr(path, 1, length(?)) = ?")
+      const collation = process.platform === "win32" ? "COLLATE NOCASE" : "";
+      this.db.prepare(`DELETE FROM roots WHERE path = ? ${collation} OR substr(path, 1, length(?)) = ? ${collation}`)
         .run(folder, prefix, prefix);
-      const result = this.db.prepare("DELETE FROM files WHERE substr(path, 1, length(?)) = ?")
+      const result = this.db.prepare(`DELETE FROM files WHERE substr(path, 1, length(?)) = ? ${collation}`)
         .run(prefix, prefix);
       this.db.exec("COMMIT");
       return Number(result.changes);
@@ -127,6 +137,7 @@ class FileIndex {
       }
       for (const entry of entries) {
         const full = join(dir, entry.name);
+        if (this.isInternalPath(full)) continue;
         if (entry.isSymbolicLink()) {
           // Links are intentionally outside the scan scope, not a scan failure.
           continue;
