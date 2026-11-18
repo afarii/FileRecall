@@ -7,3 +7,6 @@
 /desktop/.vite/
 /desktop/*.sqlite
 /desktop/*.sqlite-*
+/desktop/native/filerecall-host.exe
+/desktop/native/node-path.txt
+/desktop/native/host-manifest.json

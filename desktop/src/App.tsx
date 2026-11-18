@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import BrowserDownloads from "./BrowserDownloads";
 
 function formatSize(bytes: number) {
   if (bytes < 1024) return bytes + " B";
@@ -7,6 +8,7 @@ function formatSize(bytes: number) {
 }
 
 export default function App() {
+  const [view, setView] = useState<"files" | "downloads">("files");
   const [folders, setFolders] = useState<IndexedFolder[]>([]);
   const [historyFolders, setHistoryFolders] = useState<Array<{ path: string; count: number }>>([]);
   const [clearingFolder, setClearingFolder] = useState<string | null>(null);
@@ -120,8 +122,11 @@ export default function App() {
           <div><strong>FileRecall</strong><small>Desktop · v0.4 MVP</small></div>
         </div>
         <div className="section-label">文件来源</div>
-        <div className="nav-item active">▦ &nbsp; 本地文件记忆</div>
-        <div className="nav-item muted">↗ &nbsp; 浏览器来源（后续同步）</div>
+        <button className={view === "files" ? "nav-item active" : "nav-item"}
+          aria-pressed={view === "files"} onClick={() => setView("files")}>本地文件记忆</button>
+        <button className={view === "downloads" ? "nav-item active" : "nav-item"}
+          aria-pressed={view === "downloads"} onClick={() => setView("downloads")}>浏览器下载</button>
+        <div hidden={view !== "files"}>
         <div className="section-label with-gap">已授权目录</div>
         {folders.length === 0 ? <p className="sidebar-note">尚未选择扫描目录</p> :
           folders.map((folder) => <div key={folder.path}>
@@ -140,11 +145,12 @@ export default function App() {
             <div className="folder" title={history.path}>{history.path}</div>
             <button className="stop-indexing" disabled={busy} onClick={() => setClearingFolder(history.path)} aria-label={`清除历史 ${history.path}`}>清除历史（{history.count} 条）</button>
           </div>)}
+        </div>
         <div className="sidebar-bottom">仅扫描你主动选择的目录<br />默认不上传文件信息</div>
       </aside>
       <main>
         <header className="topbar"><span>文件记忆库</span><span className="local-label">● &nbsp; 本地存储</span></header>
-        <div className="content">
+        {view === "downloads" ? <BrowserDownloads /> : <div className="content">
           <div className="heading-row">
             <div><h1>找回你的文件</h1><p>即使文件已经删除，历史记录仍然保留。</p></div>
             <div className="actions">
@@ -170,7 +176,7 @@ export default function App() {
               <button className="link-button" disabled={file.status === "missing"} onClick={() => reveal(file.path)}>在文件夹中显示</button>
             </div>)}
           <p className="footer-note">文件变化自动更新，应用启动时补扫，每 30 秒校验并恢复目录监控。丢失记录保留至手动清除。</p>
-        </div>
+        </div>}
       </main>
     </div>
   );

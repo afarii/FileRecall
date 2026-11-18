@@ -3,6 +3,7 @@
   "name": "FileRecall",
   "version": "0.3.0",
   "permissions": ["downloads", "downloads.open", "tabs", "storage"],
+  "optional_permissions": ["nativeMessaging"],
   "action": {
     "default_title": "打开 FileRecall 下载历史"
   },

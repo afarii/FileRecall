@@ -2,7 +2,7 @@
 
 const { randomUUID } = require("node:crypto");
 const fs = require("node:fs/promises");
-const { basename, isAbsolute, join, resolve, sep } = require("node:path");
+const { basename, dirname, isAbsolute, join, resolve, sep } = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 
 class FileIndex {
@@ -37,7 +37,8 @@ class FileIndex {
 
   isInternalPath(path) {
     const full = resolve(path);
-    const internal = [this.databasePath, this.databasePath + "-wal", this.databasePath + "-shm"];
+    const downloadsPath = join(dirname(this.databasePath), "browser-downloads.sqlite");
+    const internal = [this.databasePath, downloadsPath].flatMap((path) => [path, path + "-wal", path + "-shm"]);
     return internal.some((candidate) => process.platform === "win32"
       ? candidate.toLowerCase() === full.toLowerCase() : candidate === full);
   }

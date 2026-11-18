@@ -17,6 +17,18 @@ interface IndexedFolder {
   lastScanAt: number | null;
 }
 
+interface BrowserDownload {
+  id: string;
+  path: string;
+  name: string;
+  startedAt: number;
+  sourceStatus: "matched" | "confirmed" | "manual" | "candidate" | "unknown" | "rejected";
+  sourceTitle: string;
+  domain: string;
+  canOpenSource: boolean;
+  pathStatus: "present" | "missing" | "unknown";
+}
+
 interface ScanResult {
   folder: string;
   indexed?: number;
@@ -36,6 +48,8 @@ interface Window {
     addFolder(): Promise<ScanResult | null>;
     rescan(): Promise<ScanResult[]>;
     search(query: string): Promise<FileRecord[]>;
+    downloads(query: string): Promise<BrowserDownload[]>;
+    openSource(id: string): Promise<boolean>;
     reveal(path: string): Promise<{ ok: boolean; message?: string }>;
   };
 }

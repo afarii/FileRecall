@@ -3,12 +3,18 @@ on:
   pull_request:
     paths:
       - "desktop/**"
+      - "desktop-sync*.mjs"
+      - "history.html"
+      - "manifest.json"
       - ".github/workflows/desktop.yml"
   push:
     branches:
       - "feat/desktop-v0.4-mvp"
     paths:
       - "desktop/**"
+      - "desktop-sync*.mjs"
+      - "history.html"
+      - "manifest.json"
       - ".github/workflows/desktop.yml"
 
 jobs:
@@ -22,6 +28,10 @@ jobs:
       - name: Install dependencies
         working-directory: desktop
         run: npm ci
+      - name: Build Chrome Native Messaging host
+        run: ./desktop/native/register-chrome.ps1 -ExtensionId aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -BuildOnly
+      - name: Run extension regression tests
+        run: node --test *.test.mjs
       - name: Run unit tests
         working-directory: desktop
         run: npm test

@@ -5,6 +5,7 @@ const { existsSync } = require("node:fs");
 const { join } = require("node:path");
 const { FileIndex } = require("./indexer.cjs");
 const { DirectoryMonitor } = require("./monitor.cjs");
+const { DownloadSources, downloadPathStatus } = require("./download-sources.cjs");
 
 let window;
 let index;
@@ -51,6 +52,26 @@ app.whenReady().then(() => {
   if (!ownsLock) return;
   index = new FileIndex(join(app.getPath("userData"), "files.sqlite"));
   monitor = new DirectoryMonitor(index, { onChange: notifyChanged });
+  const downloadsPath = join(app.getPath("userData"), "browser-downloads.sqlite");
+  function readDownloads(action, fallback) {
+    if (!existsSync(downloadsPath)) return fallback;
+    const sources = new DownloadSources(downloadsPath, { readOnly: true });
+    try {
+      return action(sources);
+    } finally {
+      sources.close();
+    }
+  }
+  ipcMain.handle("downloads:search", async (_event, query) => {
+    const rows = readDownloads((sources) => sources.search(query), []);
+    return Promise.all(rows.map(async (row) => ({ ...row, pathStatus: await downloadPathStatus(row.path) })));
+  });
+  ipcMain.handle("downloads:open-source", async (_event, id) => {
+    const url = readDownloads((sources) => sources.sourceToOpen(id), null);
+    if (!url) return false;
+    await shell.openExternal(url);
+    return true;
+  });
 
   ipcMain.handle("folders:list", () => index.roots().map((root) => ({ ...root, ...monitor.status(root.path) })));
   ipcMain.handle("history:folders", () => index.historyRoots());

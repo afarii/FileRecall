@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   addFolder: () => ipcRenderer.invoke("folders:add"),
   rescan: () => ipcRenderer.invoke("folders:rescan"),
   search: (query) => ipcRenderer.invoke("files:search", query),
+  downloads: (query) => ipcRenderer.invoke("downloads:search", query),
+  openSource: (id) => ipcRenderer.invoke("downloads:open-source", id),
   reveal: (path) => ipcRenderer.invoke("files:reveal", path),
   onChanged: (callback) => {
     const listener = () => callback();
