@@ -1,0 +1,30 @@
+appId: com.filerecall.desktop
+productName: FileRecall
+directories:
+  output: release
+files:
+  - dist/**
+  - electron/*.cjs
+  - "!electron/*.test.cjs"
+  - "!electron/launch.cjs"
+extraResources:
+  - from: .package-host
+    to: native
+    filter:
+      - filerecall-host.exe
+  - from: electron
+    to: electron
+    filter:
+      - native-host.cjs
+      - download-sources.cjs
+win:
+  executableName: FileRecall
+  electronLanguages:
+    - zh-CN
+    - en-US
+nsis:
+  artifactName: FileRecall-Setup-${version}-${arch}.${ext}
+  oneClick: false
+  runAfterFinish: false
+  allowToChangeInstallationDirectory: true
+  include: native/installer.nsh

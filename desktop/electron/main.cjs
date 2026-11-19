@@ -1,0 +1,170 @@
+"use strict";
+
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { existsSync } = require("node:fs");
+const { join } = require("node:path");
+const { FileIndex } = require("./indexer.cjs");
+const { DirectoryMonitor } = require("./monitor.cjs");
+const { DownloadSources, downloadPathStatus } = require("./download-sources.cjs");
+const { chromeConnection } = require("./chrome-connection.cjs");
+
+let window;
+let index;
+let monitor;
+let closing = false;
+let quitReady = false;
+
+// Keep the development and installed builds on the same Windows library.
+if (process.platform === "win32") {
+  app.setPath("userData", join(process.env.APPDATA || app.getPath("appData"), "filerecall-desktop"));
+}
+const ownsLock = app.requestSingleInstanceLock();
+if (!ownsLock) app.quit();
+app.on("second-instance", () => {
+  if (window?.isMinimized()) window.restore();
+  window?.focus();
+});
+
+function notifyChanged() {
+  if (window && !window.isDestroyed()) window.webContents.send("library:changed");
+}
+
+function createWindow() {
+  window = new BrowserWindow({
+    width: 1120,
+    height: 760,
+    minWidth: 760,
+    minHeight: 520,
+    title: "FileRecall",
+    webPreferences: {
+      preload: join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event) => event.preventDefault());
+  const dev = process.env.FILERECALL_DEV_SERVER;
+  if (!app.isPackaged && dev === "http://127.0.0.1:5173") {
+    window.loadURL(dev);
+  } else {
+    window.loadFile(join(__dirname, "..", "dist", "index.html"));
+  }
+}
+
+app.whenReady().then(() => {
+  if (!ownsLock) return;
+  index = new FileIndex(join(app.getPath("userData"), "files.sqlite"));
+  monitor = new DirectoryMonitor(index, { onChange: notifyChanged });
+  const downloadsPath = join(app.getPath("userData"), "browser-downloads.sqlite");
+  const connection = app.isPackaged && process.platform === "win32"
+    ? chromeConnection(app.getPath("userData"), process.resourcesPath)
+    : null;
+  ipcMain.handle("chrome:status", async () => ({
+    available: Boolean(connection),
+    extensionId: await connection?.status() ?? null,
+  }));
+  ipcMain.handle("chrome:connect", (_event, id) => connection?.connect(id) ?? null);
+  function readDownloads(action, fallback) {
+    if (!existsSync(downloadsPath)) return fallback;
+    const sources = new DownloadSources(downloadsPath, { readOnly: true });
+    try {
+      return action(sources);
+    } finally {
+      sources.close();
+    }
+  }
+  ipcMain.handle("downloads:search", async (_event, query) => {
+    const rows = readDownloads((sources) => sources.search(query), []);
+    return Promise.all(rows.map(async (row) => ({ ...row, pathStatus: await downloadPathStatus(row.path) })));
+  });
+  ipcMain.handle("downloads:open-source", async (_event, id) => {
+    const url = readDownloads((sources) => sources.sourceToOpen(id), null);
+    if (!url) return false;
+    await shell.openExternal(url);
+    return true;
+  });
+
+  ipcMain.handle("folders:list", () => index.roots().map((root) => ({ ...root, ...monitor.status(root.path) })));
+  ipcMain.handle("history:folders", () => index.historyRoots());
+  ipcMain.handle("history:clear", (_event, path) => monitor.run(() => {
+    const removed = index.clearHistory(path);
+    monitor.syncRoots();
+    return removed;
+  }));
+  ipcMain.handle("folders:remove", (_event, path) => monitor.run(() => {
+    index.removeRoot(path);
+    monitor.syncRoots();
+  }));
+  ipcMain.handle("folders:add", async () => {
+    const result = await dialog.showOpenDialog(window, {
+      title: "选择要索引的文件夹",
+      properties: ["openDirectory"],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return monitor.run(async () => {
+      const scan = await index.addRoot(result.filePaths[0]);
+      monitor.syncRoots();
+      return scan;
+    });
+  });
+  ipcMain.handle("folders:rescan", () => monitor.run(async () => {
+    monitor.syncRoots();
+    const results = [];
+    for (const root of index.roots()) {
+      const result = await monitor.scanRoot(root.path);
+      if (result) results.push(result);
+    }
+    return results;
+  }));
+  ipcMain.handle("files:search", (_event, query) => index.search(query));
+  ipcMain.handle("files:text-enabled", () => index.textEnabled());
+  ipcMain.handle("files:set-text-enabled", (_event, enabled) => monitor.run(() => {
+    index.setTextEnabled(enabled);
+    if (enabled) {
+      for (const root of index.roots()) monitor.requestScan(root.path, 0);
+    }
+    notifyChanged();
+  }));
+  ipcMain.handle("files:reveal", async (_event, path) => {
+    if (typeof path !== "string") return { ok: false, message: "无效路径。" };
+    const record = index.get(path);
+    const target = record?.status === "missing" ? await index.movedTarget(path) : record?.path;
+    if (!target || !existsSync(target)) {
+      return { ok: false, message: "文件已丢失，请重新扫描以更新状态。" };
+    }
+    shell.showItemInFolder(target);
+    return { ok: true };
+  });
+
+  createWindow();
+  monitor.start();
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+}).catch((error) => {
+  dialog.showErrorBox("FileRecall 启动失败", String(error.message || error));
+  app.quit();
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", (event) => {
+  if (monitor && !quitReady) {
+    event.preventDefault();
+    if (closing) return;
+    closing = true;
+    monitor.close().then(() => {
+      index?.close();
+      index = undefined;
+      quitReady = true;
+      app.quit();
+    });
+    return;
+  }
+  index?.close();
+  index = undefined;
+});

@@ -1,2 +1,14 @@
 # Local release archives
 /FileRecall-v*.zip
+
+# Desktop dependencies, build output and local data
+/desktop/node_modules/
+/desktop/dist/
+/desktop/.vite/
+/desktop/release/
+/desktop/.package-host/
+/desktop/*.sqlite
+/desktop/*.sqlite-*
+/desktop/native/filerecall-host.exe
+/desktop/native/node-path.txt
+/desktop/native/host-manifest.json
