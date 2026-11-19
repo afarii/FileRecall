@@ -119,6 +119,14 @@ app.whenReady().then(() => {
     return results;
   }));
   ipcMain.handle("files:search", (_event, query) => index.search(query));
+  ipcMain.handle("files:text-enabled", () => index.textEnabled());
+  ipcMain.handle("files:set-text-enabled", (_event, enabled) => monitor.run(() => {
+    index.setTextEnabled(enabled);
+    if (enabled) {
+      for (const root of index.roots()) monitor.requestScan(root.path, 0);
+    }
+    notifyChanged();
+  }));
   ipcMain.handle("files:reveal", async (_event, path) => {
     if (typeof path !== "string") return { ok: false, message: "无效路径。" };
     const record = index.get(path);

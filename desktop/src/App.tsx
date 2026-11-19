@@ -18,6 +18,8 @@ export default function App() {
   currentQuery.current = query;
   const reloadVersion = useRef(0);
   const [busy, setBusy] = useState(false);
+  const [textEnabled, setTextEnabled] = useState<boolean>();
+  const [changingText, setChangingText] = useState(false);
   const [notice, setNotice] = useState("文件索引仅保存在本机。");
   const [error, setError] = useState("");
 
@@ -41,6 +43,25 @@ export default function App() {
   useEffect(() => window.fileRecall.onChanged(() => {
     reload(currentQuery.current).catch((err) => setError(String(err)));
   }), [reload]);
+
+  useEffect(() => {
+    window.fileRecall.textEnabled().then(setTextEnabled).catch(() => setError("无法读取正文搜索设置。"));
+  }, []);
+
+  async function changeText(enabled: boolean) {
+    setChangingText(true);
+    setError("");
+    try {
+      await window.fileRecall.setTextEnabled(enabled);
+      setTextEnabled(enabled);
+      setNotice(enabled ? "已开启正文搜索，授权目录会自动重扫。" : "已关闭正文搜索并清除正文索引。");
+      await reload(currentQuery.current);
+    } catch {
+      setError("无法更新正文搜索设置，请重试。");
+    } finally {
+      setChangingText(false);
+    }
+  }
 
   async function perform(action: () => Promise<ScanResult | ScanResult[] | null>) {
     setBusy(true);
@@ -158,7 +179,14 @@ export default function App() {
               <button disabled={busy} onClick={() => perform(() => window.fileRecall.addFolder())}>+ 添加文件夹</button>
             </div>
           </div>
-          <div className="search"><span>⌕</span><input aria-label="搜索文件名或路径" placeholder="搜索文件名、路径…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
+          <div className="search"><span>⌕</span><input aria-label="搜索本地文件"
+            placeholder={textEnabled ? "搜索文件名、路径或正文…" : "搜索文件名、路径…"}
+            value={query} onChange={(event) => setQuery(event.target.value)} /></div>
+          {textEnabled !== undefined && <label className="text-search-setting">
+            <input type="checkbox" checked={textEnabled} disabled={changingText || busy}
+              onChange={(event) => void changeText(event.target.checked)} />
+            <span>搜索文件正文 <small>索引授权目录中不超过 128 KiB 的 UTF-8 TXT、Markdown。丢失文件仍可按正文搜索，关闭时清除本机正文索引。</small></span>
+          </label>}
           {error && <div className="alert error" role="alert">{error}</div>}
           {clearingFolder && <div className="clear-history" role="dialog" aria-label="清除目录历史">
             <p>清除 {clearingFolder} 及其子目录的全部 FileRecall 历史，并停止这些目录的索引。磁盘文件保留。</p>
@@ -172,6 +200,7 @@ export default function App() {
             files.map((file) => <div className="result-row" key={file.path}>
               <div className="file-info"><span className="file-icon">▤</span><div>
                 <strong title={file.path}>{file.name}</strong><small title={file.path}>{file.path}</small>
+                {file.textMatched === 1 && <small>正文匹配</small>}
                 {file.currentPath && <small title={file.currentPath}>现址 {file.currentPath}</small>}
                 {!file.currentPath && file.possiblePath && <small title={file.possiblePath}>未确认候选 {file.possiblePath}</small>}
               </div></div>

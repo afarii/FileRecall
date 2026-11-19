@@ -166,6 +166,76 @@ test("search treats wildcards literally", async () => {
   }
 });
 
+test("opt-in literal text search persists, follows edits and retains missing history until cleared", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "filerecall-text-"));
+  const folder = join(workspace, "files");
+  const database = join(workspace, "index.sqlite");
+  const note = join(folder, "notes.MD");
+  let index;
+  try {
+    await mkdir(folder);
+    await writeFile(note, "冬季预算草案 Alpha%_");
+    await writeFile(join(folder, "large.txt"), "Oversized secret".padEnd(128 * 1024 + 1));
+    await writeFile(join(folder, "binary.txt"), Buffer.from([0xff, ...Buffer.from("binary marker")]));
+    index = new FileIndex(database);
+    await index.addRoot(folder);
+    assert.equal(index.textEnabled(), false);
+    assert.deepEqual(index.search("预算草案"), []);
+    assert.throws(() => index.setTextEnabled("true"), /正文索引设置/);
+    index.setTextEnabled(true);
+    await index.scan(folder);
+    assert.equal(index.search("预算草案")[0].textMatched, 1);
+    assert.equal(index.search("ALPHA%_")[0].path, note);
+    assert.deepEqual(index.search("ALPHA__"), []);
+    assert.deepEqual(index.search("Oversized secret"), []);
+    assert.deepEqual(index.search("binary marker"), []);
+    index.close();
+    index = new FileIndex(database);
+    assert.equal(index.textEnabled(), true);
+    assert.equal(index.search("预算草案")[0].path, note);
+    await writeFile(note, "春季采购清单");
+    await index.scan(folder);
+    assert.deepEqual(index.search("预算草案"), []);
+    assert.equal(index.search("采购清单")[0].status, "present");
+    await unlink(note);
+    await index.scan(folder);
+    assert.equal(index.search("采购清单")[0].status, "missing");
+    index.setTextEnabled(false);
+    assert.deepEqual(index.search("采购清单"), []);
+    assert.equal(index.search("notes.MD")[0].status, "missing");
+    assert.equal(index.db.prepare("SELECT COUNT(*) AS count FROM file_text").get().count, 0);
+  } finally {
+    index?.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("revoking a root clears its text unless a child is still authorized; clearing history cascades", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "filerecall-text-roots-"));
+  const folder = join(workspace, "files");
+  const child = join(folder, "child");
+  const index = new FileIndex(join(workspace, "index.sqlite"));
+  try {
+    await mkdir(child, { recursive: true });
+    await writeFile(join(folder, "outside.txt"), "outside scope");
+    await writeFile(join(child, "inside.txt"), "inside scope");
+    index.setTextEnabled(true);
+    await index.addRoot(folder);
+    await index.addRoot(child);
+    assert.equal(index.search("scope").length, 2);
+    index.removeRoot(folder);
+    assert.equal(index.search("outside.txt").length, 1);
+    assert.equal(index.search("outside scope").length, 0);
+    assert.equal(index.search("inside scope").length, 1);
+    index.clearHistory(child);
+    assert.equal(index.search("inside scope").length, 0);
+    assert.equal(index.db.prepare("SELECT COUNT(*) AS count FROM file_text").get().count, 0);
+  } finally {
+    index.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("overlapping roots detect missing files regardless of the last scanning root", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "filerecall-"));
   const folder = join(workspace, "files");

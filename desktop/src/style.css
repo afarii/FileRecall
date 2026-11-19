@@ -20,3 +20,6 @@ button.nav-item{border:0;background:transparent;color:inherit;text-align:left}bu
   border-radius: 8px;
   padding: 8px 12px;
 }
+.text-search-setting { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; font-size: 13px; }
+.text-search-setting input { margin: 2px 0 0; }
+.text-search-setting small { display: block; margin-top: 4px; color: #65798e; line-height: 1.5; }

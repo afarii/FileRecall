@@ -9,6 +9,7 @@ interface FileRecord {
   status: "present" | "missing";
   currentPath: string | null;
   possiblePath: string | null;
+  textMatched: 0 | 1;
 }
 
 interface IndexedFolder {
@@ -50,6 +51,8 @@ interface Window {
     addFolder(): Promise<ScanResult | null>;
     rescan(): Promise<ScanResult[]>;
     search(query: string): Promise<FileRecord[]>;
+    textEnabled(): Promise<boolean>;
+    setTextEnabled(enabled: boolean): Promise<void>;
     downloads(query: string): Promise<BrowserDownload[]>;
     chromeStatus(): Promise<{ available: boolean; extensionId: string | null }>;
     connectChrome(extensionId: string): Promise<string | null>;

@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   addFolder: () => ipcRenderer.invoke("folders:add"),
   rescan: () => ipcRenderer.invoke("folders:rescan"),
   search: (query) => ipcRenderer.invoke("files:search", query),
+  textEnabled: () => ipcRenderer.invoke("files:text-enabled"),
+  setTextEnabled: (enabled) => ipcRenderer.invoke("files:set-text-enabled", enabled),
   downloads: (query) => ipcRenderer.invoke("downloads:search", query),
   chromeStatus: () => ipcRenderer.invoke("chrome:status"),
   connectChrome: (id) => ipcRenderer.invoke("chrome:connect", id),

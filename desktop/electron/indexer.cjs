@@ -4,6 +4,7 @@ const { randomUUID } = require("node:crypto");
 const fs = require("node:fs/promises");
 const { basename, dirname, isAbsolute, join, resolve, sep } = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
+const { canIndexText, textSignature, readText } = require("./text-content.cjs");
 
 function fileIdentity(info) {
   if (!info.isFile() || info.nlink !== 1n || info.dev <= 0n || info.ino <= 0n || info.birthtimeNs <= 0n) return null;
@@ -38,6 +39,8 @@ class FileIndex {
     this.db = new DatabaseSync(databasePath);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
+      PRAGMA foreign_keys = ON;
+      PRAGMA secure_delete = ON;
       CREATE TABLE IF NOT EXISTS roots (
         path TEXT PRIMARY KEY,
         added_at INTEGER NOT NULL
@@ -55,6 +58,12 @@ class FileIndex {
       );
       CREATE INDEX IF NOT EXISTS files_root ON files(root_path);
       CREATE INDEX IF NOT EXISTS files_name ON files(name);
+      CREATE TABLE IF NOT EXISTS preferences (name TEXT PRIMARY KEY, enabled INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS file_text (
+        path TEXT PRIMARY KEY REFERENCES files(path) ON DELETE CASCADE,
+        signature TEXT NOT NULL,
+        content TEXT NOT NULL
+      );
     `);
     const columns = new Set(this.db.prepare("PRAGMA table_info(files)").all().map((column) => column.name));
     if (!columns.has("file_identity")) this.db.exec("ALTER TABLE files ADD COLUMN file_identity TEXT");
@@ -64,6 +73,23 @@ class FileIndex {
 
   roots() {
     return this.db.prepare("SELECT path, added_at AS addedAt FROM roots ORDER BY path").all();
+  }
+
+  textEnabled() {
+    return this.db.prepare("SELECT enabled FROM preferences WHERE name = 'file_text'").get()?.enabled === 1;
+  }
+
+  setTextEnabled(enabled) {
+    if (typeof enabled !== "boolean") throw new TypeError("无效的正文索引设置。");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("INSERT OR REPLACE INTO preferences VALUES ('file_text', ?)").run(Number(enabled));
+      if (!enabled) this.db.exec("DELETE FROM file_text");
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   isInternalPath(path) {
@@ -78,7 +104,22 @@ class FileIndex {
     if (typeof rawPath !== "string" || !isAbsolute(rawPath)) {
       throw new Error("请选择有效的绝对目录路径。");
     }
-    this.db.prepare("DELETE FROM roots WHERE path = ?").run(resolve(rawPath));
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("DELETE FROM roots WHERE path = ?").run(resolve(rawPath));
+      const collation = process.platform === "win32" ? "COLLATE NOCASE" : "";
+      this.db.prepare(`
+        DELETE FROM file_text WHERE NOT EXISTS (
+          SELECT 1 FROM roots
+          WHERE substr(file_text.path, 1, length(rtrim(roots.path, ?) || ?)) =
+                rtrim(roots.path, ?) || ? ${collation}
+        )
+      `).run(sep, sep, sep, sep);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   historyRoots() {
@@ -137,6 +178,10 @@ class FileIndex {
 
     const token = randomUUID();
     const now = Date.now();
+    const textRoot = this.textEnabled() ? await fs.realpath(folder) : null;
+    const lookupText = this.db.prepare("SELECT signature FROM file_text WHERE path = ?");
+    const saveText = this.db.prepare("INSERT OR REPLACE INTO file_text VALUES (?, ?, ?)");
+    const deleteText = this.db.prepare("DELETE FROM file_text WHERE path = ?");
     const upsert = this.db.prepare(`
       INSERT INTO files (path, root_path, name, size, modified_at, first_seen_at, last_seen_at, scan_token, status, file_identity)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present', ?)
@@ -190,9 +235,24 @@ class FileIndex {
             skipped++;
             continue;
           }
+          let text;
+          let signature;
+          if (textRoot) {
+            const cached = lookupText.get(full);
+            if (canIndexText(full, info.size)) {
+              signature = textSignature(info);
+              if (cached?.signature !== signature) {
+                text = await readText(full, textRoot, signature).catch(() => null);
+              }
+            } else if (cached) {
+              text = null;
+            }
+            if (text !== undefined && cached) deleteText.run(full);
+          }
           // Database failures must reach the caller and prevent missing-file updates.
           upsert.run(full, folder, basename(full), Number(info.size), Number(info.mtimeNs) / 1e6,
             now, now, token, fileIdentity(info));
+          if (typeof text === "string") saveText.run(full, signature, text);
           indexed++;
         }
       }
@@ -222,15 +282,19 @@ class FileIndex {
   search(rawQuery = "") {
     const query = typeof rawQuery === "string" ? rawQuery.trim().slice(0, 200) : "";
     const pattern = "%" + query.replace(/[\\%_]/g, "\\$&") + "%";
+    const searchText = query.length > 0 && this.textEnabled();
+    const textMatch = searchText ? "instr(file_text.content, ?) > 0" : "0";
     return this.db.prepare(`
-      SELECT path, root_path AS rootPath, name, size, modified_at AS modifiedAt,
+      SELECT files.path, root_path AS rootPath, name, size, modified_at AS modifiedAt,
              first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, status,
-             ${CURRENT_PATH} AS currentPath, ${POSSIBLE_PATH} AS possiblePath
+             ${CURRENT_PATH} AS currentPath, ${POSSIBLE_PATH} AS possiblePath,
+             coalesce(${textMatch}, 0) AS textMatched
       FROM files
-      WHERE name LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\'
+      ${searchText ? "LEFT JOIN file_text ON file_text.path = files.path" : ""}
+      WHERE name LIKE ? ESCAPE '\\' OR files.path LIKE ? ESCAPE '\\' OR textMatched = 1
       ORDER BY CASE WHEN status = 'present' OR currentPath IS NOT NULL THEN 0 ELSE 1 END, last_seen_at DESC
       LIMIT 500
-    `).all(pattern, pattern);
+    `).all(...(searchText ? [query.toLowerCase(), pattern, pattern] : [pattern, pattern]));
   }
 
   get(path) {
