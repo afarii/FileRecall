@@ -19,6 +19,9 @@ extraResources:
       - download-sources.cjs
 win:
   executableName: FileRecall
+  electronLanguages:
+    - zh-CN
+    - en-US
 nsis:
   artifactName: FileRecall-Setup-${version}-${arch}.${ext}
   oneClick: false
