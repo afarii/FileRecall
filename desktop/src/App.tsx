@@ -96,7 +96,7 @@ export default function App() {
     }
   }
 
-  const missingCount = files.filter((file) => file.status === "missing").length;
+  const missingCount = files.filter((file) => file.status === "missing" && !file.currentPath).length;
 
   async function clearHistory() {
     if (!clearingFolder) return;
@@ -170,10 +170,18 @@ export default function App() {
           <div className="result-header"><span>文件</span><span>大小</span><span>状态</span><span>操作</span></div>
           {files.length === 0 ? <div className="empty">{folders.length === 0 ? "添加一个文件夹，开始建立你的本地文件记忆。" : "没有找到匹配的文件。"}</div> :
             files.map((file) => <div className="result-row" key={file.path}>
-              <div className="file-info"><span className="file-icon">▤</span><div><strong title={file.path}>{file.name}</strong><small title={file.path}>{file.path}</small></div></div>
+              <div className="file-info"><span className="file-icon">▤</span><div>
+                <strong title={file.path}>{file.name}</strong><small title={file.path}>{file.path}</small>
+                {file.currentPath && <small title={file.currentPath}>现址 {file.currentPath}</small>}
+                {!file.currentPath && file.possiblePath && <small title={file.possiblePath}>未确认候选 {file.possiblePath}</small>}
+              </div></div>
               <span className="size">{formatSize(file.size)}</span>
-              <span className={file.status === "present" ? "pill present" : "pill missing"}>{file.status === "present" ? "存在" : "已丢失"}</span>
-              <button className="link-button" disabled={file.status === "missing"} onClick={() => reveal(file.path)}>在文件夹中显示</button>
+              <span className={file.status === "present" || file.currentPath ? "pill present" : "pill missing"}>
+                {file.currentPath ? "路径已变更" : file.status === "present" ? "存在" : "已丢失"}
+              </span>
+              <button className="link-button" disabled={file.status === "missing" && !file.currentPath} onClick={() => reveal(file.path)}>
+                {file.currentPath ? "定位现址" : "在文件夹中显示"}
+              </button>
             </div>)}
           <p className="footer-note">文件变化自动更新，应用启动时补扫，每 30 秒校验并恢复目录监控。丢失记录保留至手动清除。</p>
         </div>}

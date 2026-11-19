@@ -2,9 +2,10 @@
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { mkdtemp, mkdir, writeFile, rename, unlink, rm, symlink } = require("node:fs/promises");
+const { mkdtemp, mkdir, writeFile, rename, unlink, rm, symlink, copyFile, utimes } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
+const { DatabaseSync } = require("node:sqlite");
 const { FileIndex } = require("./indexer.cjs");
 
 test("scan persists entries; rescans retain vanished files as history", async () => {
@@ -34,6 +35,113 @@ test("scan persists entries; rescans retain vanished files as history", async ()
     index = new FileIndex(database);
     assert.equal(index.roots().length, 1);
     assert.equal(index.search("renamed")[0].status, "missing");
+  } finally {
+    index?.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("old paths follow a file across authorized roots after restart and refuse a replacement", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "filerecall-"));
+  const source = join(workspace, "source");
+  const destination = join(workspace, "destination");
+  const original = join(source, "original.txt");
+  const intermediate = join(destination, "intermediate.txt");
+  const current = join(destination, "current.txt");
+  const database = join(workspace, "index.sqlite");
+  let index = new FileIndex(database);
+  try {
+    await mkdir(source);
+    await mkdir(destination);
+    await writeFile(original, "same bytes");
+    await writeFile(join(destination, "independent.txt"), "same bytes");
+    await index.addRoot(source);
+    await index.addRoot(destination);
+    index.close();
+    await rename(original, intermediate);
+    index = new FileIndex(database);
+
+    await index.scan(destination);
+    assert.equal(index.search("original.txt")[0].currentPath, null);
+    await index.scan(source);
+    assert.equal(index.search("original.txt")[0].currentPath, intermediate);
+    assert.equal(await index.movedTarget(original), intermediate);
+
+    await rename(intermediate, current);
+    await index.scan(destination);
+    assert.equal(index.search("original.txt")[0].currentPath, current);
+    assert.equal(index.search("intermediate.txt")[0].currentPath, current);
+    index.removeRoot(destination);
+    assert.equal(index.search("original.txt")[0].currentPath, null);
+    await index.addRoot(destination);
+    assert.equal(await index.movedTarget(original), current);
+
+    await rename(current, join(workspace, "outside.txt"));
+    await writeFile(current, "same bytes");
+    assert.equal(await index.movedTarget(original), null);
+    await index.scan(destination);
+    assert.equal(index.search("original.txt")[0].currentPath, null);
+  } finally {
+    index.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("a metadata match is a candidate and competing copies suppress the suggestion", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "filerecall-"));
+  const folder = join(workspace, "files");
+  const index = new FileIndex(join(workspace, "index.sqlite"));
+  try {
+    const firstDirectory = join(folder, "first");
+    const secondDirectory = join(folder, "second");
+    await mkdir(firstDirectory, { recursive: true });
+    await mkdir(secondDirectory);
+    const oldPath = join(folder, "report.txt");
+    const copy = join(firstDirectory, "report.txt");
+    const otherCopy = join(secondDirectory, "report.txt");
+    const timestamp = new Date("2026-01-01T00:00:00.000Z");
+    await writeFile(oldPath, "document");
+    await utimes(oldPath, timestamp, timestamp);
+    await index.addRoot(folder);
+    await copyFile(oldPath, copy);
+    await utimes(copy, timestamp, timestamp);
+    await unlink(oldPath);
+    await index.scan(folder);
+    const old = () => index.search(oldPath).find(({ path }) => path === oldPath);
+    assert.equal(old().currentPath, null);
+    assert.equal(old().possiblePath, copy);
+    assert.equal(await index.movedTarget(oldPath), null);
+    await copyFile(copy, otherCopy);
+    await utimes(otherCopy, timestamp, timestamp);
+    await index.scan(folder);
+    assert.equal(old().possiblePath, null);
+  } finally {
+    index.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("older path-only records remain searchable and gain identity after reindexing", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "filerecall-"));
+  const folder = join(workspace, "files");
+  const database = join(workspace, "index.sqlite");
+  const original = join(folder, "legacy.txt");
+  const current = join(folder, "modern.txt");
+  let index;
+  try {
+    await mkdir(folder);
+    await writeFile(original, "legacy");
+    const legacy = new DatabaseSync(database);
+    legacy.exec("CREATE TABLE files (path TEXT PRIMARY KEY, root_path TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL, modified_at REAL NOT NULL, first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, scan_token TEXT NOT NULL, status TEXT NOT NULL)");
+    legacy.prepare("INSERT INTO files VALUES (?, ?, 'legacy.txt', 6, 0, 1, 1, 'legacy', 'present')").run(original, folder);
+    legacy.close();
+    index = new FileIndex(database);
+    assert.equal(index.search("legacy")[0].currentPath, null);
+    await index.addRoot(folder);
+    assert.equal(index.search("legacy")[0].firstSeenAt, 1);
+    await rename(original, current);
+    await index.scan(folder);
+    assert.equal(index.search("legacy")[0].currentPath, current);
   } finally {
     index?.close();
     await rm(workspace, { recursive: true, force: true });

@@ -106,13 +106,14 @@ app.whenReady().then(() => {
     return results;
   }));
   ipcMain.handle("files:search", (_event, query) => index.search(query));
-  ipcMain.handle("files:reveal", (_event, path) => {
+  ipcMain.handle("files:reveal", async (_event, path) => {
     if (typeof path !== "string") return { ok: false, message: "无效路径。" };
     const record = index.get(path);
-    if (!record || record.status !== "present" || !existsSync(record.path)) {
+    const target = record?.status === "missing" ? await index.movedTarget(path) : record?.path;
+    if (!target || !existsSync(target)) {
       return { ok: false, message: "文件已丢失，请重新扫描以更新状态。" };
     }
-    shell.showItemInFolder(record.path);
+    shell.showItemInFolder(target);
     return { ok: true };
   });
 

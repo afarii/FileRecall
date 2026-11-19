@@ -7,6 +7,8 @@ interface FileRecord {
   firstSeenAt: number;
   lastSeenAt: number;
   status: "present" | "missing";
+  currentPath: string | null;
+  possiblePath: string | null;
 }
 
 interface IndexedFolder {

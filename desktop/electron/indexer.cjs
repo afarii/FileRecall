@@ -5,6 +5,33 @@ const fs = require("node:fs/promises");
 const { basename, dirname, isAbsolute, join, resolve, sep } = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 
+function fileIdentity(info) {
+  if (!info.isFile() || info.nlink !== 1n || info.dev <= 0n || info.ino <= 0n || info.birthtimeNs <= 0n) return null;
+  return [info.dev, info.ino, info.birthtimeNs].join(":");
+}
+
+const CURRENT_PATH = `
+  CASE WHEN files.status = 'missing' AND files.identity_verified = 1 THEN (
+    SELECT CASE WHEN COUNT(*) = 1 THEN MIN(current.path) END
+    FROM files AS current
+    WHERE current.file_identity = files.file_identity AND current.status = 'present'
+      AND current.identity_verified = 1
+      AND EXISTS (SELECT 1 FROM roots WHERE roots.path = current.root_path)
+  ) END
+`;
+
+const POSSIBLE_PATH = `
+  CASE WHEN files.status = 'missing' AND files.size > 0 AND files.identity_verified = 1 THEN (
+    SELECT CASE WHEN COUNT(*) = 1 THEN MIN(candidate.path) END
+    FROM files AS candidate
+    WHERE candidate.name = files.name AND candidate.size = files.size AND candidate.modified_at = files.modified_at
+      AND candidate.first_seen_at >= files.last_seen_at
+      AND candidate.status = 'present' AND candidate.identity_verified = 1
+      AND candidate.file_identity <> files.file_identity
+      AND EXISTS (SELECT 1 FROM roots WHERE roots.path = candidate.root_path)
+  ) END
+`;
+
 class FileIndex {
   constructor(databasePath) {
     this.databasePath = resolve(databasePath);
@@ -29,6 +56,10 @@ class FileIndex {
       CREATE INDEX IF NOT EXISTS files_root ON files(root_path);
       CREATE INDEX IF NOT EXISTS files_name ON files(name);
     `);
+    const columns = new Set(this.db.prepare("PRAGMA table_info(files)").all().map((column) => column.name));
+    if (!columns.has("file_identity")) this.db.exec("ALTER TABLE files ADD COLUMN file_identity TEXT");
+    if (!columns.has("identity_verified")) this.db.exec("ALTER TABLE files ADD COLUMN identity_verified INTEGER NOT NULL DEFAULT 0");
+    this.db.exec("CREATE INDEX IF NOT EXISTS files_identity ON files(file_identity, status) WHERE file_identity IS NOT NULL");
   }
 
   roots() {
@@ -107,8 +138,8 @@ class FileIndex {
     const token = randomUUID();
     const now = Date.now();
     const upsert = this.db.prepare(`
-      INSERT INTO files (path, root_path, name, size, modified_at, first_seen_at, last_seen_at, scan_token, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present')
+      INSERT INTO files (path, root_path, name, size, modified_at, first_seen_at, last_seen_at, scan_token, status, file_identity)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present', ?)
       ON CONFLICT(path) DO UPDATE SET
         root_path = excluded.root_path,
         name = excluded.name,
@@ -116,6 +147,8 @@ class FileIndex {
         modified_at = excluded.modified_at,
         last_seen_at = excluded.last_seen_at,
         scan_token = excluded.scan_token,
+        identity_verified = CASE WHEN files.file_identity = excluded.file_identity THEN files.identity_verified ELSE 0 END,
+        file_identity = excluded.file_identity,
         status = 'present'
     `);
     const stack = [folder];
@@ -148,7 +181,7 @@ class FileIndex {
         } else if (entry.isFile()) {
           let info;
           try {
-            info = await fs.lstat(full);
+            info = await fs.lstat(full, { bigint: true });
             if (!info.isFile()) {
               skipped++;
               continue;
@@ -158,7 +191,8 @@ class FileIndex {
             continue;
           }
           // Database failures must reach the caller and prevent missing-file updates.
-          upsert.run(full, folder, basename(full), info.size, info.mtimeMs, now, now, token);
+          upsert.run(full, folder, basename(full), Number(info.size), Number(info.mtimeNs) / 1e6,
+            now, now, token, fileIdentity(info));
           indexed++;
         }
       }
@@ -168,11 +202,19 @@ class FileIndex {
     let missing = 0;
     if (skipped === 0) {
       const prefix = folder.endsWith(sep) ? folder : folder + sep;
-      const result = this.db.prepare(`
-        UPDATE files SET status = 'missing'
-        WHERE substr(path, 1, length(?)) = ? AND scan_token <> ? AND status = 'present'
-      `).run(prefix, prefix, token);
-      missing = Number(result.changes);
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.db.prepare("UPDATE files SET identity_verified = 1 WHERE scan_token = ? AND file_identity IS NOT NULL AND identity_verified = 0").run(token);
+        const result = this.db.prepare(`
+          UPDATE files SET status = 'missing'
+          WHERE substr(path, 1, length(?)) = ? AND scan_token <> ? AND status = 'present'
+        `).run(prefix, prefix, token);
+        this.db.exec("COMMIT");
+        missing = Number(result.changes);
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
     }
     return { folder, indexed, skipped, missing, complete: skipped === 0 };
   }
@@ -182,16 +224,34 @@ class FileIndex {
     const pattern = "%" + query.replace(/[\\%_]/g, "\\$&") + "%";
     return this.db.prepare(`
       SELECT path, root_path AS rootPath, name, size, modified_at AS modifiedAt,
-             first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, status
+             first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, status,
+             ${CURRENT_PATH} AS currentPath, ${POSSIBLE_PATH} AS possiblePath
       FROM files
       WHERE name LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\'
-      ORDER BY CASE status WHEN 'present' THEN 0 ELSE 1 END, last_seen_at DESC
+      ORDER BY CASE WHEN status = 'present' OR currentPath IS NOT NULL THEN 0 ELSE 1 END, last_seen_at DESC
       LIMIT 500
     `).all(pattern, pattern);
   }
 
   get(path) {
     return this.db.prepare("SELECT path, status FROM files WHERE path = ?").get(path);
+  }
+
+  async movedTarget(path) {
+    const lookup = this.db.prepare(`
+      SELECT file_identity AS identity, ${CURRENT_PATH} AS currentPath FROM files WHERE path = ?
+    `);
+    const record = lookup.get(path);
+    if (!record?.currentPath) return null;
+    try {
+      const info = await fs.lstat(record.currentPath, { bigint: true });
+      // Resolve again after the filesystem check in case background scanning changed the association.
+      const latest = lookup.get(path);
+      return latest?.currentPath === record.currentPath && latest.identity === record.identity
+        && fileIdentity(info) === record.identity ? record.currentPath : null;
+    } catch {
+      return null;
+    }
   }
 
   close() {

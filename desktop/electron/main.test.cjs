@@ -106,7 +106,7 @@ test("main reports root failures, allows retry and blocks unindexed file actions
   assert.equal(first[0].error, "offline root");
   fail = false;
   assert.equal((await main.handlers.get("folders:rescan")())[0].complete, true);
-  assert.equal(main.handlers.get("files:reveal")(null, __filename).ok, false);
+  assert.equal((await main.handlers.get("files:reveal")(null, __filename)).ok, false);
   main.app.quit();
 });
 
