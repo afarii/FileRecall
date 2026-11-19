@@ -10,4 +10,4 @@ if (!(Test-Path -LiteralPath $compiler)) {
 $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
 $exe = Join-Path (Resolve-Path -LiteralPath $OutputDirectory).Path 'filerecall-host.exe'
 & $compiler /nologo /target:exe "/out:$exe" (Join-Path $PSScriptRoot 'HostLauncher.cs')
-if ($LASTEXITCODE -ne 0) { throw '无法编译 FileRecall Chrome 连接组件。' }
+if ($LASTEXITCODE -ne 0) { throw 'Could not compile the FileRecall Chrome host.' }
