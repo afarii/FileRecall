@@ -6,6 +6,7 @@ const { join } = require("node:path");
 const { FileIndex } = require("./indexer.cjs");
 const { DirectoryMonitor } = require("./monitor.cjs");
 const { DownloadSources, downloadPathStatus } = require("./download-sources.cjs");
+const { chromeConnection } = require("./chrome-connection.cjs");
 
 let window;
 let index;
@@ -13,6 +14,10 @@ let monitor;
 let closing = false;
 let quitReady = false;
 
+// Keep the development and installed builds on the same Windows library.
+if (process.platform === "win32") {
+  app.setPath("userData", join(process.env.APPDATA || app.getPath("appData"), "filerecall-desktop"));
+}
 const ownsLock = app.requestSingleInstanceLock();
 if (!ownsLock) app.quit();
 app.on("second-instance", () => {
@@ -41,7 +46,7 @@ function createWindow() {
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   const dev = process.env.FILERECALL_DEV_SERVER;
-  if (dev === "http://127.0.0.1:5173") {
+  if (!app.isPackaged && dev === "http://127.0.0.1:5173") {
     window.loadURL(dev);
   } else {
     window.loadFile(join(__dirname, "..", "dist", "index.html"));
@@ -53,6 +58,14 @@ app.whenReady().then(() => {
   index = new FileIndex(join(app.getPath("userData"), "files.sqlite"));
   monitor = new DirectoryMonitor(index, { onChange: notifyChanged });
   const downloadsPath = join(app.getPath("userData"), "browser-downloads.sqlite");
+  const connection = app.isPackaged && process.platform === "win32"
+    ? chromeConnection(app.getPath("userData"), process.resourcesPath)
+    : null;
+  ipcMain.handle("chrome:status", async () => ({
+    available: Boolean(connection),
+    extensionId: await connection?.status() ?? null,
+  }));
+  ipcMain.handle("chrome:connect", (_event, id) => connection?.connect(id) ?? null);
   function readDownloads(action, fallback) {
     if (!existsSync(downloadsPath)) return fallback;
     const sources = new DownloadSources(downloadsPath, { readOnly: true });

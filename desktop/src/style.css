@@ -2,3 +2,21 @@
 .clear-history{padding:16px;border:1px solid #d7e0eb;border-radius:9px;background:#fff;margin-top:15px;font-size:13px;overflow-wrap:anywhere}.clear-history p{margin-bottom:12px}.clear-history button{margin-right:10px}
 .folder-state{font-size:11px;color:#b9d3e6;padding:0 12px 8px;overflow-wrap:anywhere;line-height:1.6}.folder-state p{color:#ffcfa2;max-height:96px;overflow:auto}
 button.nav-item{border:0;background:transparent;color:inherit;text-align:left}button.nav-item.active{background:#234965}.download-row{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(100px,auto);gap:14px;align-items:center;background:#fff;border:1px solid #e6edf4;border-radius:10px;margin-top:8px;padding:14px 17px}
+.chrome-connection {
+  margin-top: 16px;
+  padding: 14px 17px;
+  border: 1px solid #d7e0eb;
+  border-radius: 9px;
+  background: #fff;
+  font-size: 13px;
+}
+.chrome-connection summary { cursor: pointer; font-weight: 600; }
+.chrome-connection p { margin-top: 10px; line-height: 1.6; }
+.chrome-connection form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.chrome-connection input {
+  flex: 0 1 300px;
+  min-width: 0;
+  border: 1px solid #d7e0eb;
+  border-radius: 8px;
+  padding: 8px 12px;
+}

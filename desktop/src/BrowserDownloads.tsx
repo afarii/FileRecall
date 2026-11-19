@@ -15,6 +15,38 @@ export default function BrowserDownloads() {
   const [records, setRecords] = useState<BrowserDownload[] | null>(null);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [connection, setConnection] = useState<{ available: boolean; extensionId: string | null }>();
+  const [extensionId, setExtensionId] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState("");
+
+  useEffect(() => {
+    let current = true;
+    window.fileRecall.chromeStatus().then((status) => {
+      if (current) {
+        setConnection(status);
+        setExtensionId(status.extensionId || "");
+      }
+    }).catch(() => {
+      if (current) setConnectionError("无法读取 Chrome 连接设置。");
+    });
+    return () => { current = false; };
+  }, []);
+
+  async function connectChrome() {
+    setConnecting(true);
+    setConnectionError("");
+    try {
+      const id = await window.fileRecall.connectChrome(extensionId);
+      if (!id) throw new Error();
+      setConnection({ available: true, extensionId: id });
+      setExtensionId(id);
+    } catch {
+      setConnectionError("无法保存 Chrome 连接，请检查扩展 ID 后重试。");
+    } finally {
+      setConnecting(false);
+    }
+  }
 
   useEffect(() => {
     let current = true;
@@ -42,6 +74,17 @@ export default function BrowserDownloads() {
       <h1>浏览器下载</h1>
       <button className="secondary" onClick={() => setRefresh((value) => value + 1)}>刷新</button>
     </div>
+    {connection?.available && <details className="chrome-connection">
+      <summary>Chrome 连接设置</summary>
+      <p>在 Chrome 打开扩展程序管理页（chrome://extensions），开启开发者模式并复制 FileRecall 的扩展 ID。</p>
+      <form onSubmit={(event) => { event.preventDefault(); void connectChrome(); }}>
+        <input aria-label="Chrome 扩展 ID" placeholder="粘贴 FileRecall 扩展 ID" spellCheck={false}
+          value={extensionId} onChange={(event) => setExtensionId(event.target.value)} />
+        <button disabled={connecting || !/^[a-p]{32}$/.test(extensionId.trim())}>保存连接</button>
+      </form>
+      {connection.extensionId && <p role="status">连接已配置。请在 Chrome 的 FileRecall 历史页发起同步。</p>}
+    </details>}
+    {connectionError && <div className="alert error" role="alert">{connectionError}</div>}
     <div className="search">
       <input aria-label="搜索下载和来源" placeholder="搜索文件名、网站或页面标题"
         value={query} onChange={(event) => setQuery(event.target.value)} />

@@ -5,6 +5,8 @@
 /desktop/node_modules/
 /desktop/dist/
 /desktop/.vite/
+/desktop/release/
+/desktop/.package-host/
 /desktop/*.sqlite
 /desktop/*.sqlite-*
 /desktop/native/filerecall-host.exe

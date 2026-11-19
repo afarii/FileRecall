@@ -9,13 +9,8 @@ $ErrorActionPreference = 'Stop'
 $node = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
 $major = & $node -p 'Number(process.versions.node.split(".")[0])'
 if ($LASTEXITCODE -ne 0 -or [int]$major -lt 24) { throw '需要 Node.js 24 或更高版本。' }
-$compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-if (!(Test-Path -LiteralPath $compiler)) {
-    $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
-}
+& (Join-Path $PSScriptRoot 'build-host.ps1')
 $exe = Join-Path $PSScriptRoot 'filerecall-host.exe'
-& $compiler /nologo /target:exe "/out:$exe" (Join-Path $PSScriptRoot 'HostLauncher.cs')
-if ($LASTEXITCODE -ne 0) { throw '无法编译 FileRecall Chrome 连接组件。' }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'node-path.txt'), $node, $utf8)
 $manifestPath = Join-Path $PSScriptRoot 'host-manifest.json'

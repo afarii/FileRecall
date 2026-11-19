@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   rescan: () => ipcRenderer.invoke("folders:rescan"),
   search: (query) => ipcRenderer.invoke("files:search", query),
   downloads: (query) => ipcRenderer.invoke("downloads:search", query),
+  chromeStatus: () => ipcRenderer.invoke("chrome:status"),
+  connectChrome: (id) => ipcRenderer.invoke("chrome:connect", id),
   openSource: (id) => ipcRenderer.invoke("downloads:open-source", id),
   reveal: (path) => ipcRenderer.invoke("files:reveal", path),
   onChanged: (callback) => {

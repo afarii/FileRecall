@@ -51,6 +51,8 @@ interface Window {
     rescan(): Promise<ScanResult[]>;
     search(query: string): Promise<FileRecord[]>;
     downloads(query: string): Promise<BrowserDownload[]>;
+    chromeStatus(): Promise<{ available: boolean; extensionId: string | null }>;
+    connectChrome(extensionId: string): Promise<string | null>;
     openSource(id: string): Promise<boolean>;
     reveal(path: string): Promise<{ ok: boolean; message?: string }>;
   };

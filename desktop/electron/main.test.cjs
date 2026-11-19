@@ -14,6 +14,7 @@ async function startMain(index, ownsLock = true) {
   app.requestSingleInstanceLock = () => ownsLock;
   app.whenReady = () => Promise.resolve();
   app.getPath = () => __dirname;
+  app.setPath = () => {};
   app.quit = () => {
     let prevented = false;
     app.emit("before-quit", { preventDefault() { prevented = true; } });

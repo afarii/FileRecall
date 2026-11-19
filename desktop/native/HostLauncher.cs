@@ -13,12 +13,19 @@ internal static class HostLauncher
             // Process creates a StreamWriter for child stdin. Suppress its UTF-8 BOM.
             Console.InputEncoding = new UTF8Encoding(false);
             string folder = AppDomain.CurrentDomain.BaseDirectory;
-            string node = File.ReadAllText(Path.Combine(folder, "node-path.txt")).Trim();
+            string packagedRuntime = Path.GetFullPath(Path.Combine(folder, "..", "..", "FileRecall.exe"));
+            bool packaged = File.Exists(packagedRuntime);
+            string node = packaged ? packagedRuntime : File.ReadAllText(Path.Combine(folder, "node-path.txt")).Trim();
             string host = Path.GetFullPath(Path.Combine(folder, "..", "electron", "native-host.cjs"));
             var start = new ProcessStartInfo(node, "\"" + host + "\"") {
                 UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
             };
+            if (packaged)
+            {
+                start.EnvironmentVariables["ELECTRON_RUN_AS_NODE"] = "1";
+                start.EnvironmentVariables.Remove("NODE_OPTIONS");
+            }
             byte[] message;
             using (var input = new BinaryReader(Console.OpenStandardInput()))
             {

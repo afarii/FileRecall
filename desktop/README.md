@@ -2,6 +2,22 @@
 
 Windows 桌面端支持本地文件索引，以及由 Chrome 扩展发起的下载记录同步。
 
+## Windows 安装与升级
+
+从 GitHub Actions 的构建产物获取 `FileRecall-Windows-x64`，解压后运行 `FileRecall-Setup-0.4.0-x64.exe`。验收包面向 Windows 10/11 x64，按当前用户安装，包含运行环境，暂未签名。
+
+安装版沿用 `%APPDATA%\filerecall-desktop` 中的文件索引和浏览器下载库。升级前退出 FileRecall，再运行新版安装包。卸载会删除安装文件和安装版创建的 Chrome 注册项，应用数据目录保留。
+
+在安装版中打开「浏览器下载」→「Chrome 连接设置」，按提示粘贴已安装的 FileRecall 扩展 ID 并保存。之后在 Chrome 扩展历史页发起同步，首次同步需通过 Chrome 的权限提示。扩展仍通过现有 Chrome 扩展程序页面安装或更新。
+
+本地构建安装包使用 `npm ci` 和 `npm run package:win`，在 `desktop/release` 获取安装文件。打包机需要 Windows、Node.js 24 和 Windows .NET Framework 编译器。
+
+### 安装版验收
+
+1. 在干净的 Windows 用户下安装，打开 FileRecall，添加测试目录并搜索。退出再打开，确认索引保留。
+2. 配置 Chrome 扩展 ID，同步带可信来源的测试下载。退出桌面后再次同步，重启桌面核对记录只有一条，来源页面可以打开。
+3. 在已有旧版索引和下载库的 Windows 用户下安装，检查授权目录、文件历史和下载来源。覆盖安装一次后，检查 Chrome 仍可同步；卸载后检查应用数据仍在。
+
 ## 本地启动
 
 要求：Windows 10/11、Node.js 22.13+、npm。
@@ -89,9 +105,8 @@ npm test
 - 本地全文搜索和语义检索安排在后续版本。
 - 默认只扫描授权文件夹；不扫描系统全盘、不上传文件信息。
 - 使用 Node 内置 `node:sqlite`，当前为实验性 API；运行时可能出现实验性功能警告。
-- 本阶段尚未生成 Windows 安装包，须先通过 Windows 实机验证。
 
-## 在 Windows 同步 Chrome 下载
+## 开发环境下同步 Chrome 下载
 
 1. 安装 Node.js 24 或更高版本。在 Chrome 的扩展程序页面开启开发者模式并加载仓库根目录，或重新加载已从同一目录安装的 FileRecall。复制页面显示的扩展 ID。
 2. 在仓库根目录运行以下命令。连接程序由 Windows .NET Framework 编译器构建，并注册到当前 Windows 用户。生成文件保存在 `desktop/native`。

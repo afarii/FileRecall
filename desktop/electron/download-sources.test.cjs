@@ -50,17 +50,14 @@ test("download presence distinguishes missing paths from unavailable volumes", a
   assert.equal(await downloadPathStatus("Z:\\notes.txt", stat), "unknown");
 });
 
-const launcher = join(__dirname, "..", "native", "filerecall-host.exe");
-test("Windows native executable imports a framed request while the desktop is closed", {
-  skip: !fs.existsSync(launcher), timeout: 15000,
-}, () => {
+function checkLauncher(launcher) {
   const workspace = fs.mkdtempSync(join(tmpdir(), "filerecall-host-"));
   try {
     const body = Buffer.from(JSON.stringify(message));
     const header = Buffer.alloc(4);
     header.writeUInt32LE(body.length);
     const child = spawnSync(launcher, {
-      env: { ...process.env, APPDATA: workspace },
+      env: { ...process.env, APPDATA: workspace, Path: "" },
       input: Buffer.concat([header, body]),
       timeout: 10000,
       windowsHide: true,
@@ -79,4 +76,14 @@ test("Windows native executable imports a framed request while the desktop is cl
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
-});
+}
+
+const launcher = join(__dirname, "..", "native", "filerecall-host.exe");
+test("Windows development host imports a framed request while the desktop is closed", {
+  skip: !fs.existsSync(launcher), timeout: 15000,
+}, () => checkLauncher(launcher));
+
+const packagedLauncher = process.env.FILERECALL_PACKAGED_HOST;
+test("packaged Windows host imports a framed request using the bundled runtime", {
+  skip: !packagedLauncher, timeout: 15000,
+}, () => checkLauncher(packagedLauncher));
