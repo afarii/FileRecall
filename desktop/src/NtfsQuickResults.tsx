@@ -27,17 +27,35 @@ export default function NtfsQuickResults({ query, enabled, onResults }: {
 
   useEffect(() => {
     let active = true;
+    let deepTimer: number | undefined;
     if (!enabled || !query.trim()) {
       onResults({ query, files: [] });
       return;
     }
-    // Retain the previous matching rows during incremental NTFS status refreshes.
+    const api = window.fileRecall as typeof window.fileRecall & {
+      searchNtfsDeep: (query: string) => Promise<NtfsResult[]>;
+    };
+    // The first result page uses only B-tree indexes. Deep substring scans
+    // occur only for zero-hit queries and run on a separate worker.
     const timer = window.setTimeout(() => {
-      void window.fileRecall.searchNtfs(query).then((files) => {
-        if (active) onResults({ query, files });
+      void api.searchNtfs(query).then((files) => {
+        if (!active) return;
+        onResults({ query, files });
+        const word = query.trim();
+        if (!files.length && (word.length >= 4 || /\\p{Script=Han}/u.test(word))) {
+          deepTimer = window.setTimeout(() => {
+            void api.searchNtfsDeep(query).then((deepFiles) => {
+              if (active) onResults({ query, files: deepFiles });
+            }).catch(() => {});
+          }, 180);
+        }
       }).catch(() => { if (active) onResults({ query, files: [] }); });
     }, 0);
-    return () => { active = false; window.clearTimeout(timer); };
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      if (deepTimer !== undefined) window.clearTimeout(deepTimer);
+    };
   }, [query, enabled, revision, onResults]);
 
   if (!enabled || !query.trim()) return null;
