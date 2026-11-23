@@ -37,6 +37,7 @@
     "onnxruntime-node": "1.21.0",
     "saxes": "6.0.0",
     "unpdf": "2.2.1",
-    "yauzl": "3.4.0"
+    "yauzl": "3.4.0",
+    "pinyin-pro": "3.29.5"
   }
 }
