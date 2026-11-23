@@ -381,8 +381,11 @@ class NtfsCatalog {
       collect(matches);
     }
     if (results.length >= 100) return results;
+    // Short initials such as "sy" are handled by indexed prefix scans. Avoid an
+    // O(entire disk) infix scan on each keystroke while an input is still changing.
+    if (primary.length <= 2 || results.length >= 40) return results;
 
-    // Preserve substring searches; normal filename queries avoid parent-path checks.
+    // Preserve substring searches for longer, more selective queries.
     const all = filters(terms);
     const infix = this.db.prepare(columns + " " + from +
       " WHERE i.drive = ? AND " + all.where + " LIMIT 200").all(drive, ...all.args);
