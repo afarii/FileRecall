@@ -77,7 +77,7 @@ export default function NtfsPanel() {
     {status?.autoPhase === "authorizing" && <p role="status">正在连接只读助手，可能需要 Windows 授权…</p>}
     {status?.autoMessage && <p role="status" className="muted">{status.autoMessage}</p>}
     {(status?.autoPhase === "permission-required" || status?.autoPhase === "error") &&
-      <button type="button" className="secondary" disabled={busy} onClick={() => void manage(api.retryAutoNtfs)}>重试自动索引</button>
+      <button type="button" className="secondary" disabled={busy} onClick={() => void manage(api.retryAutoNtfs)}>重试自动索引</button>}
     {!status?.available && <p role="status">{status ? "请使用 Windows 安装版启用整盘搜索。" : "正在读取状态…"}</p>}
     {status?.available && <>
       <form className="search-form" onSubmit={(event) => {
