@@ -4,6 +4,7 @@ type Sample = {
   time: string; mainLoopP95Ms: number; mainLoopMaxMs: number;
   mainLoopUtilPct: number; processCpuPctOfOneCore: number;
   processRssMiB: number; rendererLagMs: number;
+  localSearchP95Ms?: number; ntfsSearchP95Ms?: number; deepSearchP95Ms?: number;
   ntfsLoopP95Ms: number; ntfsLoopMaxMs: number; ntfsActiveScanCount: number;
 };
 type Report = { format: string; recent: Sample[] };
@@ -44,6 +45,7 @@ export default function PerformanceDiagnostics() {
       </div>
       {latest && <p className="perf-summary">
         主进程最严重卡顿：{latest.mainLoopMaxMs} ms；索引线程：{latest.ntfsLoopMaxMs} ms；
+        本地搜索 P95：{latest.localSearchP95Ms ?? 0} ms；NTFS 搜索 P95：{latest.ntfsSearchP95Ms ?? 0} ms；
         CPU（按单核计）：{latest.processCpuPctOfOneCore}%；内存：{latest.processRssMiB} MiB；
         索引中磁盘：{latest.ntfsActiveScanCount}
       </p>}
