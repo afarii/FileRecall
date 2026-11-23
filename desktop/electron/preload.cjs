@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   enableNtfs: (drive) => ipcRenderer.invoke("ntfs:enable", drive),
   disableNtfs: (drive) => ipcRenderer.invoke("ntfs:disable", drive),
   searchNtfs: (query) => ipcRenderer.invoke("ntfs:search", query),
+  searchNtfsDeep: (query) => ipcRenderer.invoke("ntfs:search-deep", query),
   retryAutoNtfs: () => ipcRenderer.invoke("ntfs:retry-auto"),
   ntfsMotw: (drive, id) => ipcRenderer.invoke("ntfs:motw", drive, id),
   localMotw: (path) => ipcRenderer.invoke("files:motw", path),
