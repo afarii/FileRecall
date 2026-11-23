@@ -59,8 +59,13 @@ class NtfsSearch {
       autoPhase: this.autoPhase,
       autoMessage: this.autoMessage,
       connected: Boolean(this.reader && !this.reader.closed),
-      drives: this.catalog.drives().map(({ drive }) => ({
-        drive, ...(this.sessions.get(drive) ?? { phase: "disconnected" }),
+      drives: this.catalog.drives().map(({ drive, cursor, build_position }) => ({
+        drive, ...(this.catalog.excluded().includes(drive)
+          ? { phase: "paused", message: "已暂停，原有索引保留在本机" }
+          : this.sessions.get(drive) ?? (build_position !== null
+            ? { phase: "cached", message: "从上次进度继续建立索引" }
+            : cursor ? { phase: "cached", message: "已恢复原有索引，正在核对变更" }
+              : { phase: "disconnected" })),
       })).map(({ drive, phase, message }) => ({ drive, phase, message })),
     };
   }
@@ -179,7 +184,7 @@ class NtfsSearch {
       this.catalog.disable(drive);
       this.sessions.delete(drive);
       this.cancelled.delete(drive);
-      if (!this.catalog.drives().length) this.reader?.close();
+      if (!this.catalog.activeDrives().length) this.reader?.close();
       this.notify();
       return this.status();
     });
@@ -197,7 +202,7 @@ class NtfsSearch {
     void this.enqueue(async () => {
       let incomplete = false;
       try {
-        for (const drive of this.catalog.drives()) {
+        for (const drive of this.catalog.activeDrives()) {
           if (this.closed || this.reader.closed) break;
           try {
             // Bounded round-robin slices keep D:/E:/F: progressing while C: builds.
@@ -304,11 +309,14 @@ class NtfsSearch {
   }
 
   searchableDrives() {
-    return this.catalog.drives().flatMap(({ drive, cursor }) => {
+    return this.catalog.activeDrives().flatMap(({ drive, cursor, build_position }) => {
+      const phase = this.sessions.get(drive)?.phase;
+      if (phase === "error") return [];
       const live = Boolean(this.reader && !this.reader.closed &&
-        ["ready", "building"].includes(this.sessions.get(drive)?.phase));
-      const cached = Boolean(!this.sessions.has(drive) && cursor &&
-        (!this.reader || this.reader.closed));
+        ["ready", "building", "catching-up"].includes(phase));
+      // The on-disk snapshot remains usable while UAC and journal verification
+      // happen. Only file actions require a validated live reader.
+      const cached = !live && Boolean(cursor || build_position !== null);
       return live || cached ? [{ drive, cached }] : [];
     });
   }
