@@ -38,7 +38,7 @@ class NtfsSearch {
     this.searchKeyTimer = setInterval(() => {
       if (this.closed) return;
       try {
-        const updated = this.catalog.backfillSearchKeys(200);
+        const updated = this.catalog.backfillSearchKeys(24);
         if (!updated) {
           clearInterval(this.searchKeyTimer);
           this.searchKeyTimer = undefined;
@@ -49,7 +49,7 @@ class NtfsSearch {
         clearInterval(this.searchKeyTimer);
         this.searchKeyTimer = undefined;
       }
-    }, 80);
+    }, 350);
     this.searchKeyTimer.unref();
   }
 
@@ -253,7 +253,15 @@ class NtfsSearch {
           break;
         }
         if (!batch.next || BigInt(batch.next) <= BigInt(position)) throw new Error("MFT 枚举进度未前进。");
-        this.catalog.apply(drive, batch.rows, true, undefined, batch.next);
+        // Commit complete cursor positions only. Allow renderer events between
+        // bounded SQLite inserts and pinyin conversion batches.
+        for (let offset = 0; offset < batch.rows.length; offset += 192) {
+          const slice = batch.rows.slice(offset, offset + 192);
+          const isLast = offset + slice.length === batch.rows.length;
+          this.catalog.apply(drive, slice, true, undefined, isLast ? batch.next : undefined);
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        if (!batch.rows.length) this.catalog.apply(drive, [], true, undefined, batch.next);
         processed += batch.rows.length;
         position = batch.next;
       }
@@ -278,7 +286,13 @@ class NtfsSearch {
         this.notify();
         return true;
       }
-      this.catalog.apply(drive, batch.rows, false, info.journal, batch.next);
+      for (let offset = 0; offset < batch.rows.length; offset += 192) {
+        const slice = batch.rows.slice(offset, offset + 192);
+        const isLast = offset + slice.length === batch.rows.length;
+        this.catalog.apply(drive, slice, false, info.journal, isLast ? batch.next : undefined);
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      if (!batch.rows.length) this.catalog.checkpoint(drive, info.journal, batch.next);
       if (batch.next === cursor) throw new Error("USN 读取进度未前进。");
       cursor = batch.next;
     }
