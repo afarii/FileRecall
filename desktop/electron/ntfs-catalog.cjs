@@ -24,6 +24,7 @@ class NtfsCatalog {
       CREATE TABLE IF NOT EXISTS ntfs_drive (
         drive TEXT PRIMARY KEY, volume TEXT NOT NULL, journal TEXT, cursor TEXT
       ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS ntfs_excluded_drive (drive TEXT PRIMARY KEY) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS ntfs_parent (
         drive TEXT NOT NULL, id TEXT NOT NULL, path TEXT NOT NULL, folded TEXT NOT NULL,
         PRIMARY KEY (drive, id)
@@ -52,8 +53,13 @@ class NtfsCatalog {
 
   drives() { return this.db.prepare("SELECT * FROM ntfs_drive ORDER BY drive").all(); }
 
+  excluded() { return this.db.prepare("SELECT drive FROM ntfs_excluded_drive").all().map((row) => row.drive); }
+
   enable(drive, volume) {
-    this.db.prepare("INSERT OR IGNORE INTO ntfs_drive VALUES (?, ?, NULL, NULL)").run(drive, volume);
+    this.transaction(() => {
+      this.db.prepare("INSERT OR IGNORE INTO ntfs_drive VALUES (?, ?, NULL, NULL)").run(drive, volume);
+      this.db.prepare("DELETE FROM ntfs_excluded_drive WHERE drive = ?").run(drive);
+    });
   }
 
   discardRows(drive) {
@@ -65,6 +71,7 @@ class NtfsCatalog {
     this.transaction(() => {
       this.discardRows(drive);
       this.db.prepare("DELETE FROM ntfs_drive WHERE drive = ?").run(drive);
+      this.db.prepare("INSERT OR IGNORE INTO ntfs_excluded_drive VALUES (?)").run(drive);
     });
   }
 

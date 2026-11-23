@@ -2,6 +2,7 @@
 
 const { NtfsCatalog, fullPath } = require("./ntfs-catalog.cjs");
 const { startNtfsReader } = require("./ntfs-reader.cjs");
+const { discoverFixedNtfsDrives } = require("./ntfs-auto.cjs");
 
 function driveLetter(value) {
   if (typeof value !== "string" || !/^[a-z]$/i.test(value)) throw new Error("请输入一个本地磁盘盘符，例如 C。");
@@ -17,10 +18,14 @@ function validateVolume(info) {
 }
 
 class NtfsSearch {
-  constructor(database, userData, executable, { onChange, onPaths, onActiveDrives, createReader = startNtfsReader }) {
+  constructor(database, userData, executable, { onChange, onPaths, onActiveDrives,
+    createReader = startNtfsReader, discoverDrives = discoverFixedNtfsDrives }) {
     this.catalog = new NtfsCatalog(database, userData);
     this.executable = executable;
     this.createReader = createReader;
+    this.discoverDrives = discoverDrives;
+    this.autoPhase = "idle";
+    this.autoMessage = "";
     this.onChange = onChange;
     this.onPaths = onPaths;
     this.onActiveDrives = onActiveDrives;
@@ -33,6 +38,8 @@ class NtfsSearch {
   status() {
     return {
       available: true,
+      autoPhase: this.autoPhase,
+      autoMessage: this.autoMessage,
       connected: Boolean(this.reader && !this.reader.closed),
       drives: this.catalog.drives().map(({ drive }) => ({
         drive, ...(this.sessions.get(drive) ?? { phase: "disconnected" }),
@@ -70,6 +77,52 @@ class NtfsSearch {
     }
     this.schedulePoll();
     this.notify();
+  }
+
+  startAutomatically() {
+    if (this.autoTask) return this.autoTask;
+    this.autoTask = (async () => {
+      this.autoPhase = "discovering";
+      this.notify();
+      let drives;
+      try {
+        drives = await this.discoverDrives();
+      } catch {
+        this.autoPhase = "error";
+        this.autoMessage = "自动检测磁盘失败，请在整盘搜索中重试。";
+        this.notify();
+        return;
+      }
+      if (this.closed) return;
+      const excluded = new Set(this.catalog.excluded());
+      const pending = drives.filter((drive) => !excluded.has(drive));
+      if (!pending.length) {
+        this.autoPhase = "idle";
+        this.notify();
+        return;
+      }
+      this.autoPhase = "authorizing";
+      this.notify();
+      let failed = 0;
+      for (const drive of pending) {
+        if (this.closed) return;
+        try {
+          await this.enable(drive);
+        } catch (error) {
+          failed++;
+          if (/授权|UAC/.test(String(error?.message))) {
+            this.autoPhase = "permission-required";
+            this.autoMessage = "Windows 管理员授权未完成，可在整盘搜索中手动重试。";
+            this.notify();
+            return;
+          }
+        }
+      }
+      this.autoPhase = failed ? "error" : "ready";
+      this.autoMessage = failed ? "部分磁盘暂时不可用，可以稍后手动重试。" : "";
+      this.notify();
+    })();
+    return this.autoTask;
   }
 
   enable(value) {

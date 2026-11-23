@@ -15,6 +15,7 @@ const { createProvenance } = require("./provenance.cjs");
 const { createAria2Connection } = require("./aria2-connection.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { NtfsSearch } = require("./ntfs-search.cjs");
+const { readMotw } = require("./motw.cjs");
 
 let window;
 let index;
@@ -145,6 +146,10 @@ app.whenReady().then(() => {
   ipcMain.handle("ntfs:enable", (_event, drive) => ntfs?.enable(drive) ?? ntfsStatus());
   ipcMain.handle("ntfs:disable", (_event, drive) => ntfs?.disable(drive) ?? ntfsStatus());
   ipcMain.handle("ntfs:search", (_event, query) => ntfs?.search(query) ?? []);
+  ipcMain.handle("ntfs:motw", async (_event, drive, id) => {
+    const path = ntfs?.target(drive, id);
+    return path ? readMotw(path) : null;
+  });
   ipcMain.handle("ntfs:reveal", async (_event, drive, id) => {
     const path = ntfs?.target(drive, id);
     if (!path) return false;
@@ -298,6 +303,10 @@ app.whenReady().then(() => {
     return results;
   }));
   ipcMain.handle("files:search", (_event, query) => index.search(query));
+  ipcMain.handle("files:motw", async (_event, path) => {
+    const target = await fileTarget(path);
+    return target ? readMotw(target) : null;
+  });
   ipcMain.handle("files:text-enabled", () => index.textEnabled());
   ipcMain.handle("files:set-text-enabled", (_event, enabled) => monitor.run(() => {
     index.setTextEnabled(enabled);
@@ -340,6 +349,8 @@ app.whenReady().then(() => {
   if (process.platform === "win32" && Tray) createTray();
   createWindow();
   monitor.start();
+  // The window stays responsive while the read-only helper requests Windows authorization.
+  if (ntfs) void ntfs.startAutomatically().catch(() => {});
   app.on("activate", showWindow);
 }).catch((error) => {
   dialog.showErrorBox("FileRecall 启动失败", String(error.message || error));
