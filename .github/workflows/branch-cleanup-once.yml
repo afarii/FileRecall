@@ -1,0 +1,53 @@
+name: One-time cleanup of obsolete branches
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/branch-cleanup-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  delete-obsolete-branches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Delete only audited obsolete branch refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          declare -A expected=(
+            ["chore/4-v0.2.0-release"]="fcf4833ae2e3d460552ca41483c816403dd61b18"
+            ["ops/publish-preview-v0.4.3"]="a903001c5e0644a534700854c09719e9fe2ffae9"
+            ["ops/publish-preview-v0.4.4"]="e39617aff916a29169611c6f830e271a4525dff1"
+            ["ops/publish-preview-v0.4.5"]="3bb6362b9c4fac1d382482d8a8053eb47da397db"
+            ["ops/publish-preview-v0.4.6"]="685b0a65da5fafbd060ed2bd6415691cd81b985b"
+          )
+          branches=(
+            chore/4-v0.2.0-release
+            ops/publish-preview-v0.4.3
+            ops/publish-preview-v0.4.4
+            ops/publish-preview-v0.4.5
+            ops/publish-preview-v0.4.6
+          )
+          for branch in "${branches[@]}"; do
+            # Refuse to remove an open PR or branch that changed since it was reviewed.
+            if [[ "$branch" == "main" ]]; then exit 1; fi
+            current=$(gh api "repos/$GH_REPO/git/ref/heads/$branch" --jq '.object.sha')
+            test "$current" = "${expected[$branch]}" || {
+              echo "Branch $branch changed since review, aborting deletion" >&2
+              exit 1
+            }
+            open_prs=$(gh api "repos/$GH_REPO/pulls?state=open&per_page=100" --jq               "[.[] | select(.head.ref == \"$branch\")] | length")
+            test "$open_prs" = "0" || {
+              echo "An open pull request still references $branch" >&2
+              exit 1
+            }
+            gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$branch"
+            echo "Deleted audited obsolete ref: $branch"
+          done
