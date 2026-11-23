@@ -229,13 +229,11 @@ class NtfsCatalog {
     });
   }
 
-  shouldRebuild(drive, rows) {
-    return rows.some((row) => {
-      if (!(row.attributes & DIRECTORY) || !(row.reason & (SECURITY_CHANGE | RENAME_NEW))) return false;
-      const visible = this.visible(drive, row);
-      const existing = this.item(drive, row.id);
-      return row.reason & SECURITY_CHANGE ? Boolean(existing || visible) : visible && !existing;
-    });
+  shouldRebuild(_drive, _rows) {
+    // The index contains all MFT filenames, including protected directories;
+    // ACL changes no longer invalidate an index. Rename and delete events are
+    // handled incrementally by apply() and updateSubtree().
+    return false;
   }
 
   updateSubtree(drive, oldPath, newPath) {
