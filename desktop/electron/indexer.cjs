@@ -6,6 +6,7 @@ const { basename, dirname, isAbsolute, join, relative, resolve, sep } = require(
 const { DatabaseSync } = require("node:sqlite");
 const { canIndexText, textSignature, readText } = require("./text-content.cjs");
 const { readMotw } = require("./motw.cjs");
+const { nameSearchKeys, queryTerms } = require("./filename-search.cjs");
 
 function fileIdentity(info) {
   if (!info.isFile() || info.nlink !== 1n || info.dev <= 0n || info.ino <= 0n || info.birthtimeNs <= 0n) return null;
@@ -130,7 +131,11 @@ class FileIndex {
     const columns = new Set(this.db.prepare("PRAGMA table_info(files)").all().map((column) => column.name));
     if (!columns.has("file_identity")) this.db.exec("ALTER TABLE files ADD COLUMN file_identity TEXT");
     if (!columns.has("identity_verified")) this.db.exec("ALTER TABLE files ADD COLUMN identity_verified INTEGER NOT NULL DEFAULT 0");
+    if (!columns.has("name_pinyin")) this.db.exec("ALTER TABLE files ADD COLUMN name_pinyin TEXT");
+    if (!columns.has("name_initials")) this.db.exec("ALTER TABLE files ADD COLUMN name_initials TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS files_identity ON files(file_identity, status) WHERE file_identity IS NOT NULL");
+    this.db.exec("CREATE INDEX IF NOT EXISTS files_pinyin ON files(name_pinyin)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS files_initials ON files(name_initials)");
   }
 
   roots() {
@@ -301,8 +306,9 @@ class FileIndex {
         current_mark = excluded.current_mark
     `) : null;
     const upsert = this.db.prepare(`
-      INSERT INTO files (path, root_path, name, size, modified_at, first_seen_at, last_seen_at, scan_token, status, file_identity)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present', ?)
+      INSERT INTO files (path, root_path, name, size, modified_at, first_seen_at, last_seen_at,
+        scan_token, status, file_identity, name_pinyin, name_initials)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present', ?, ?, ?)
       ON CONFLICT(path) DO UPDATE SET
         root_path = excluded.root_path,
         name = excluded.name,
@@ -312,10 +318,13 @@ class FileIndex {
         scan_token = excluded.scan_token,
         identity_verified = CASE WHEN files.file_identity = excluded.file_identity THEN files.identity_verified ELSE 0 END,
         file_identity = excluded.file_identity,
+        name_pinyin = excluded.name_pinyin,
+        name_initials = excluded.name_initials,
         status = 'present'
       WHERE files.root_path <> excluded.root_path OR files.name <> excluded.name
         OR files.size <> excluded.size OR files.modified_at <> excluded.modified_at
         OR files.file_identity IS NOT excluded.file_identity OR files.status <> 'present'
+        OR files.name_pinyin IS NULL OR files.name_initials IS NULL
     `);
     const stack = target === undefined || target?.isDirectory() ? [path] : [];
     const seen = new Set();
@@ -339,8 +348,10 @@ class FileIndex {
       }
       const root = nested.find((candidate) => isWithin(candidate, full)) ?? folder;
       const identity = fileIdentity(info);
-      changed += Number(upsert.run(full, root, basename(full), Number(info.size), Number(info.mtimeNs) / 1e6,
-        now, now, token, identity).changes);
+      const name = basename(full);
+      const keys = nameSearchKeys(name);
+      changed += Number(upsert.run(full, root, name, Number(info.size), Number(info.mtimeNs) / 1e6,
+        now, now, token, identity, keys.pinyin, keys.initials).changes);
       if (typeof text === "string") changed += Number(saveText.run(full, signature, text).changes);
       // Authorized directory indexing caches bounded source evidence once per file version.
       if (identity && cachedMotw && saveMotw) {
@@ -438,25 +449,62 @@ class FileIndex {
     return { folder, indexed: seen.size, skipped, missing, complete: skipped === 0, changed };
   }
 
+  backfillSearchKeys(limit = 300) {
+    const rows = this.db.prepare(
+      "SELECT path, name FROM files WHERE name_pinyin IS NULL OR name_initials IS NULL LIMIT ?"
+    ).all(limit);
+    if (!rows.length) return 0;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const update = this.db.prepare(
+        "UPDATE files SET name_pinyin = ?, name_initials = ? WHERE path = ?"
+      );
+      for (const row of rows) {
+        const keys = nameSearchKeys(row.name);
+        update.run(keys.pinyin, keys.initials, row.path);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return rows.length;
+  }
+
   search(rawQuery = "") {
     const query = typeof rawQuery === "string" ? rawQuery.trim().slice(0, 200) : "";
-    const pattern = "%" + query.replace(/[\\%_]/g, "\\$&") + "%";
-    const searchText = query.length > 0 && this.textEnabled();
+    const terms = queryTerms(query);
+    const searchText = terms.length > 0 && this.textEnabled();
     const textMatch = searchText ? "instr(file_text.content, ?) > 0" : "0";
-    return this.db.prepare(`
-      SELECT files.path, root_path AS rootPath, name, size, modified_at AS modifiedAt,
-             first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, status,
-             ${CURRENT_PATH} AS currentPath, ${POSSIBLE_PATH} AS possiblePath,
-             coalesce(${textMatch}, 0) AS textMatched,
-             coalesce(file_annotations.favorite, 0) AS favorite,
-             coalesce(instr(file_annotations.search_text, ?), 0) > 0 AND ? <> '' AS annotationMatched
-      FROM files
-      ${searchText ? "LEFT JOIN file_text ON file_text.path = files.path" : ""}
-      LEFT JOIN file_annotations ON file_annotations.file_identity = files.file_identity AND files.identity_verified = 1
-      WHERE name LIKE ? ESCAPE '\\' OR files.path LIKE ? ESCAPE '\\' OR textMatched = 1 OR annotationMatched = 1
-      ORDER BY favorite DESC, CASE WHEN status = 'present' OR currentPath IS NOT NULL THEN 0 ELSE 1 END, last_seen_at DESC
-      LIMIT 500
-    `).all(...(searchText ? [query.toLowerCase()] : []), query.toLowerCase(), query, pattern, pattern);
+    const conditions = terms.map(() => "(" +
+      "instr(lower(files.name), ?) > 0 OR instr(lower(files.path), ?) > 0 OR " +
+      "instr(coalesce(files.name_pinyin, ''), ?) > 0 OR " +
+      "instr(coalesce(files.name_initials, ''), ?) > 0)").join(" AND ");
+    const filters = terms.flatMap((term) => [term, term, term, term]);
+    const selection = "(" + (conditions || "1") + ") OR textMatched = 1 OR annotationMatched = 1";
+    return this.db.prepare(
+      "SELECT files.path, root_path AS rootPath, name, size, modified_at AS modifiedAt," +
+      " first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, status," +
+      " " + CURRENT_PATH + " AS currentPath, " + POSSIBLE_PATH + " AS possiblePath," +
+      " coalesce(" + textMatch + ", 0) AS textMatched," +
+      " coalesce(file_annotations.favorite, 0) AS favorite," +
+      " coalesce(instr(file_annotations.search_text, ?), 0) > 0 AND ? <> '' AS annotationMatched," +
+      " CASE WHEN lower(files.name) = ? THEN 0" +
+      " WHEN instr(lower(files.name), ?) = 1 THEN 1" +
+      " WHEN instr(lower(files.name), ?) > 0 THEN 2" +
+      " WHEN instr(coalesce(files.name_pinyin, ''), ?) = 1 THEN 3" +
+      " WHEN instr(coalesce(files.name_initials, ''), ?) = 1 THEN 4" +
+      " ELSE 5 END AS matchRank" +
+      " FROM files " +
+      (searchText ? " LEFT JOIN file_text ON file_text.path = files.path " : " ") +
+      " LEFT JOIN file_annotations ON file_annotations.file_identity = files.file_identity" +
+      " AND files.identity_verified = 1 WHERE " + selection +
+      " ORDER BY matchRank, favorite DESC," +
+      " CASE WHEN status = 'present' OR currentPath IS NOT NULL THEN 0 ELSE 1 END," +
+      " last_seen_at DESC LIMIT 500"
+    ).all(...(searchText ? [query.toLowerCase()] : []),
+      query.toLowerCase(), query, query.toLowerCase(), query.toLowerCase(), query.toLowerCase(),
+      query.toLowerCase(), query.toLowerCase(), ...filters);
   }
 
   get(path) {
