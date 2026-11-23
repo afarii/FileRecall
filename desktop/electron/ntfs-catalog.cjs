@@ -357,7 +357,8 @@ class NtfsCatalog {
 
     const others = filters(terms.filter((term) => term !== rawPrimary));
     if (directoryHint) {
-      others.where += (others.where === "1" ? "" : " AND ") + "instr(p.folded, ?) > 0";
+      others.where = (others.where === "1" ? "" : others.where + " AND ") +
+        "instr(p.folded, ?) > 0";
       others.args.push(directoryHint);
     }
     const results = [];
