@@ -251,7 +251,7 @@ class NtfsCatalog {
         // Same transaction as the rows: crash recovery resumes at an exact MFT cursor.
         this.db.prepare("UPDATE ntfs_drive SET build_position = ? WHERE drive = ?").run(cursor, drive);
       }
-      if (changed && !snapshot) this.checkpoint(drive, journal, cursor);
+      if (changed && !snapshot && cursor !== undefined) this.checkpoint(drive, journal, cursor);
     });
   }
 
