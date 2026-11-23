@@ -13,7 +13,7 @@ export default function NtfsQuickResults({ query, enabled, existingPaths, onCoun
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
-    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    let refreshTimer: number | undefined;
     const unsubscribe = window.fileRecall.onNtfsChanged((value) => {
       setStatus(value);
       if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
