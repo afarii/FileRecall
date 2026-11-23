@@ -64,7 +64,7 @@ Windows CI 中使用 **60,000 条纯合成文件名**、内存 SQLite 和固定�
 | 中文子串查询 P95 | 0.301 ms |
 | 路径查询 P95 | 0.327 ms |
 
-来源：[Windows CI #60](https://github.com/afarii/FileRecall/actions/runs/45144185220)，\`node desktop/bench/ntfs-catalog.mjs\`。这些数值适用于合成样本和 CI 环境；真实整盘性能、低功耗表现、冷启动、异常重启仍需在实际 Windows 设备上验收。前缀快路径受 \`ntfs_item_name\` 索引加速；一般子串查询依然使用 SQLite \`instr()\`。
+来源：[Windows CI #60](https://github.com/afarii/FileRecall/actions/runs/45144185220)，`node desktop/bench/ntfs-catalog.mjs`。这些数值适用于合成样本和 CI 环境；真实整盘性能、低功耗表现、冷启动、异常重启仍需在实际 Windows 设备上验收。前缀快路径受 `ntfs_item_name` 索引加速；一般子串查询依然使用 SQLite `instr()`。
 
 ## 5. Windows 人工验收清单
 
@@ -79,7 +79,7 @@ Windows CI 中使用 **60,000 条纯合成文件名**、内存 SQLite 和固定�
 - [ ] 撤销与清除：停止磁盘索引，清除授权目录历史后 MOTW 证据一并清理
 - [ ] 性能记录：首次 MFT 建库耗时、峰值内存、数据库大小、典型查询 P95
 - [ ] Chrome/Motrix：同步及人工来源确认仍按预期工作
-- [ ] 升级与卸载：\`desktop-preview\` 更新流程、托盘关闭、数据保留行为
+- [ ] 升级与卸载：`desktop-preview` 更新流程、托盘关闭、数据保留行为
 
 ## 6. 当前限制与后续冻结建议
 
