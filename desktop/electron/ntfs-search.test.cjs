@@ -46,6 +46,10 @@ test("NTFS resumes changes, moves directory descendants and rebuilds if the jour
   for (const query of ["shiyanbaogao", "sybg", "pdf sybg", "sy "]) {
     assert.equal(service.search(query)[0].name, "实验报告.pdf", query);
   }
+  service.catalog.apply("E", [row("100", "51", "E:\\Old", "system.sys")], true);
+  service.catalog.recordUse("E", "99");
+  service.catalog.recordUse("E", "99");
+  assert.equal(service.search("sy")[0].name, "实验报告.pdf", "used Chinese initials rank ahead of low-use system files");
   assert.equal(service.search("pdf nonexistent").length, 0);
   assert.equal(service.search("old\\report")[0].path, "E:\\Old\\report中文.txt");
   assert.deepEqual(service.search("ntfs-index"), []);
