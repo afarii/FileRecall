@@ -48,7 +48,7 @@ export default function NtfsQuickResults({ query, enabled, existingPaths, onCoun
   if (!enabled || !query.trim()) return null;
   const building = status?.drives.some((entry) => entry.phase === "building");
   return <>
-    {building && <p className="muted" role="status">正在后台建立整盘索引，完成后自动显示更多结果…</p>}
+    {building && <p className="muted" role="status">正在后台建立整盘索引；已扫描的文件可以先搜索，完成后自动显示更多结果…</p>}
     {status?.autoPhase === "permission-required" && <p className="muted" role="status">整盘索引需要 Windows 授权，可在「磁盘索引」重试。</p>}
     {matches.length > 0 && <section className="results-group" aria-label="整盘文件结果">
       <h2>整盘文件 <span>{matches.length} 条</span></h2>
