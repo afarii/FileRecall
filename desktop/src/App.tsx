@@ -131,7 +131,8 @@ export default function App() {
   useEffect(() => {
     let active = true;
     const timer = window.setTimeout(() => {
-      if (mode === "semantic") return;
+      if (mode === "semantic" || filter === "local" || filter === "favorites" ||
+        (!searchQuery.trim() && filter === "all")) return;
       window.fileRecall.downloads(searchQuery, downloadManager).then((files) => {
         if (active) setBrowserResult({ query: searchQuery, files, manager: downloadManager });
       }).catch(() => {
@@ -139,7 +140,7 @@ export default function App() {
       });
     }, searchQuery ? 80 : 0);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [searchQuery, downloadRefresh, downloadManager, mode]);
+  }, [searchQuery, downloadRefresh, downloadManager, mode, filter]);
 
   const closeDetails = useCallback(() => {
     setSelected(null);
@@ -290,7 +291,9 @@ export default function App() {
   }, [localRecords, downloadRecords, ntfsResult, searchQuery, filter, semanticMode]);
   const selectedRecord = allRecords.find((record) => unifiedKey(record) === selected);
   const hasResults = allRecords.length > 0;
-  const loading = (!error && !downloadsOnly && !local) || (!localOnly && !browser);
+  const expectsDownloads = !semanticMode && !localOnly &&
+    (Boolean(searchQuery.trim()) || filter !== "all");
+  const loading = (!error && !downloadsOnly && !local) || (expectsDownloads && !browser);
   const pastFolders = historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path));
 
   function renderRecords(records: UnifiedRecord[], title: string) {
