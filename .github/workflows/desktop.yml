@@ -41,6 +41,9 @@ jobs:
       - name: Run unit tests
         working-directory: desktop
         run: npm test
+      - name: Benchmark synthetic NTFS catalog searches
+        working-directory: desktop
+        run: node bench/ntfs-catalog.mjs
       - name: Build Windows installer
         working-directory: desktop
         run: npm run package:win
