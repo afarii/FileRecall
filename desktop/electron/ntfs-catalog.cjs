@@ -221,7 +221,7 @@ class NtfsCatalog {
     const filter = terms.map(() => "(" +
       "instr(i.folded, ?) > 0 OR instr(coalesce(i.pinyin, ''), ?) > 0 OR " +
       "instr(coalesce(i.initials, ''), ?) > 0 OR " +
-      "instr(p.folded || char(92) || i.folded, ?) > 0)").join(" AND ");
+      "instr(rtrim(p.folded, char(92)) || char(92) || i.folded, ?) > 0)").join(" AND ");
     const args = terms.flatMap((term) => [term, term, term, term.replaceAll("/", "\\")]);
     const columns = "SELECT i.id, i.name, p.path AS directory, i.directory AS isDirectory";
     const from = "FROM ntfs_item i JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent";
