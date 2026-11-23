@@ -13,7 +13,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function until(check) {
   const deadline = Date.now() + 5000;
-  while (!check()) {
+  while (!(await check())) {
     assert.ok(Date.now() < deadline, "Timed out waiting for monitor result");
     await delay(20);
   }
@@ -58,7 +58,7 @@ test("native recursive events update additions, modifications and tombstones, an
     await fs.rename(join(folder, "nested"), movedFolder);
     await until(() => index.get(path)?.status === "missing");
     await until(() => index.get(moved)?.status === "present");
-    assert.equal((await index.movedTarget(path)), moved);
+    await until(async () => (await index.movedTarget(path)) === moved);
     await fs.unlink(moved);
     await until(() => index.get(moved)?.status === "missing");
     await monitor.run(() => { index.removeRoot(folder); monitor.syncRoots(); });
