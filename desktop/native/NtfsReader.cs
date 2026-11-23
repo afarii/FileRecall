@@ -52,59 +52,28 @@ internal static class NtfsReader
         return length;
     }
 
-    private static bool Listable(string path, string root, Dictionary<string, bool> checkedPaths)
+    // The user explicitly authorizes local metadata indexing through UAC. The MFT scan
+    // never opens individual files or folders. Regular file access still follows Windows ACLs.
+    private static string ParentPath(SafeFileHandle volume, ulong reference, string root)
     {
-        bool allowed;
-        if (checkedPaths.TryGetValue(path, out allowed)) return allowed;
-        var uncheckedPaths = new List<string>();
-        string current = path;
-        while (!checkedPaths.TryGetValue(current, out allowed))
+        var id = new FileId { Size = 24, Type = 0, Low = reference };
+        using (var handle = OpenFileById(volume, ref id, 1, ShareAll, IntPtr.Zero,
+                OpenDirectory | OpenReparsePoint))
         {
-            uncheckedPaths.Add(current);
-            try
+            if (handle.IsInvalid) return null;
+            var candidate = new StringBuilder(512);
+            uint length = GetFinalPathNameByHandle(handle, candidate, (uint)candidate.Capacity, 0);
+            if (length >= candidate.Capacity && length < 32768)
             {
-                using (var handle = CreateFile(@"\\?\" + current, 1, ShareAll, IntPtr.Zero, OpenExisting,
-                        OpenDirectory | OpenReparsePoint, IntPtr.Zero))
-                {
-                    if (handle.IsInvalid || (File.GetAttributes(current) & (FileAttributes.Directory | FileAttributes.ReparsePoint))
-                        != FileAttributes.Directory) break;
-                }
+                candidate = new StringBuilder((int)length + 1);
+                length = GetFinalPathNameByHandle(handle, candidate, (uint)candidate.Capacity, 0);
             }
-            catch (IOException) { break; }
-            catch (UnauthorizedAccessException) { break; }
-            if (String.Equals(current, root, StringComparison.OrdinalIgnoreCase)) { allowed = true; break; }
-            int split = current.LastIndexOf('\\');
-            current = split < root.Length ? root : current.Substring(0, split);
+            if (length == 0 || length >= candidate.Capacity) return null;
+            string path = candidate.ToString();
+            if (path.StartsWith(@"\\?\", StringComparison.Ordinal)) path = path.Substring(4);
+            if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return null;
+            return path;
         }
-        foreach (string checkedPath in uncheckedPaths) checkedPaths[checkedPath] = allowed;
-        return allowed;
-    }
-
-    private static string ParentPath(NamedPipeServerStream pipe, SafeFileHandle volume, ulong reference, string root,
-        Dictionary<string, bool> checkedPaths)
-    {
-        string resolved = null;
-        pipe.RunAsClient(delegate {
-            var id = new FileId { Size = 24, Type = 0, Low = reference };
-            // Test the ordinary user's directory-listing permission before returning names.
-            using (var handle = OpenFileById(volume, ref id, 1, ShareAll, IntPtr.Zero, OpenDirectory | OpenReparsePoint))
-            {
-                if (handle.IsInvalid) return;
-                var candidate = new StringBuilder(512);
-                uint length = GetFinalPathNameByHandle(handle, candidate, (uint)candidate.Capacity, 0);
-                if (length >= candidate.Capacity && length < 32768)
-                {
-                    candidate = new StringBuilder((int)length + 1);
-                    length = GetFinalPathNameByHandle(handle, candidate, (uint)candidate.Capacity, 0);
-                }
-                if (length == 0 || length >= candidate.Capacity) return;
-                string path = candidate.ToString();
-                if (path.StartsWith(@"\\?\", StringComparison.Ordinal)) path = path.Substring(4);
-                if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return;
-                if (Listable(path, root, checkedPaths)) resolved = path;
-            }
-        });
-        return resolved;
     }
 
     private static void Request(string line, TextWriter writer, NamedPipeServerStream pipe)
@@ -156,8 +125,7 @@ internal static class NtfsReader
                 return;
             }
             if (bytes < 8) throw new InvalidDataException("Invalid records.");
-            var parents = new Dictionary<ulong, string>();
-            var checkedPaths = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            var parents = snapshot ? null : new Dictionary<ulong, string>();
             for (int offset = 8; offset < bytes;)
             {
                 if (bytes - offset < 60) throw new InvalidDataException("Incomplete USN record.");
@@ -176,15 +144,18 @@ internal static class NtfsReader
                 offset += length;
                 if ((file & 0x0000ffffffffffffUL) < 24 || name == "." || name == ".." || name.Length == 0
                     || name.IndexOfAny(new[] { '\0', ':', '\\', '/' }) >= 0) continue;
-                string directory;
-                if (!parents.TryGetValue(parent, out directory))
+                // Snapshot records already include parent FRNs: reconstruct paths after
+                // scanning in bulk, with zero per-record/per-directory filesystem syscalls.
+                string directory = "";
+                if (!snapshot && (attributes & 1024U) == 0)
                 {
-                    directory = (attributes & 1024U) != 0 ? null : ParentPath(pipe, volume, parent, root, checkedPaths);
-                    // A reparse point is excluded without restricting other entries in its parent.
-                    if ((attributes & 1024U) == 0) parents[parent] = directory;
+                    if (!parents.TryGetValue(parent, out directory))
+                    {
+                        directory = ParentPath(volume, parent, root);
+                        parents[parent] = directory;
+                    }
                 }
                 if ((attributes & 1024U) != 0) directory = null;
-                if (directory == null && snapshot) continue;
                 writer.WriteLine("R\t" + Number(file) + "\t" + Number(parent) + "\t" + reason.ToString(Invariant)
                     + "\t" + attributes.ToString(Invariant) + "\t" + (directory == null ? "" : Encoded(directory))
                     + "\t" + (directory == null ? "" : Encoded(name)));

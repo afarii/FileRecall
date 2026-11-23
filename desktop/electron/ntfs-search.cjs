@@ -195,11 +195,13 @@ class NtfsSearch {
     }
     this.polling = true;
     void this.enqueue(async () => {
+      let incomplete = false;
       try {
         for (const drive of this.catalog.drives()) {
           if (this.closed || this.reader.closed) break;
           try {
-            await this.syncDrive(drive);
+            // Bounded round-robin slices keep D:/E:/F: progressing while C: builds.
+            if (await this.syncDrive(drive)) incomplete = true;
           } catch (error) {
             this.sessions.set(drive.drive, { phase: "error",
               message: error.code === 1179 ? "该卷未启用 USN 变更日志。" : error.message });
@@ -208,13 +210,18 @@ class NtfsSearch {
         }
       } finally {
         this.polling = false;
+        if (incomplete && !this.closed) {
+          clearTimeout(this.nextPoll);
+          this.nextPoll = setTimeout(() => this.schedulePoll(), 0);
+          this.nextPoll.unref();
+        }
       }
     }).catch(() => { this.polling = false; });
   }
 
   async syncDrive(state) {
     const { drive } = state;
-    if (this.cancelled?.has(drive)) return;
+    if (this.cancelled?.has(drive)) return false;
     const info = validateVolume(await this.reader.request("probe", drive));
     if (info.volume.toLowerCase() !== state.volume.toLowerCase()) {
       throw new Error("此盘符对应的磁盘已更换，旧索引已暂停。");
@@ -222,44 +229,64 @@ class NtfsSearch {
     const live = this.sessions.get(drive);
     let cursor = (live?.journal === info.journal ? live.cursor : null) ??
       (state.journal === info.journal ? state.cursor : null);
-    if (!cursor || BigInt(cursor) < BigInt(info.first) || BigInt(cursor) > BigInt(info.next) || live?.phase === "rebuild") {
-      this.sessions.set(drive, { phase: "building" });
-      this.notify();
-      this.catalog.beginBuild(drive);
-      let position = "0";
-      while (!this.closed && !this.cancelled?.has(drive)) {
+    if (state.build_position !== null || !cursor || BigInt(cursor) < BigInt(info.first) ||
+        BigInt(cursor) > BigInt(info.next) || live?.phase === "rebuild") {
+      const wasBuilding = live?.phase === "building";
+      if (!wasBuilding) {
+        this.sessions.set(drive, { phase: "building", message: "正在扫描 MFT 文件记录…" });
+        this.notify();
+      }
+      let position = this.catalog.beginBuild(drive, info.journal, info.next);
+      // Replay USN changes from the beginning of the snapshot, not its end.
+      // Otherwise changes occurring while the MFT is scanned could be lost.
+      const initialUsn = this.catalog.drives().find((entry) => entry.drive === drive)?.build_usn ?? info.next;
+      let processed = wasBuilding ? (live.processed ?? 0) : 0;
+      let finished = false;
+      // Never monopolize the single NTFS helper for an entire volume.
+      for (let page = 0; page < 32 && !this.closed && !this.cancelled?.has(drive); page++) {
         const batch = await this.reader.request("enum", drive, info.volume, info.journal, position);
-        if (batch.end) break;
+        if (batch.end) {
+          this.catalog.finishBuild(drive);
+          cursor = initialUsn;
+          this.catalog.checkpoint(drive, info.journal, cursor);
+          finished = true;
+          break;
+        }
         if (!batch.next || BigInt(batch.next) <= BigInt(position)) throw new Error("MFT 枚举进度未前进。");
-        this.catalog.apply(drive, batch.rows, true);
+        this.catalog.apply(drive, batch.rows, true, undefined, batch.next);
+        processed += batch.rows.length;
         position = batch.next;
       }
-      if (this.closed || this.cancelled?.has(drive)) return;
-      cursor = info.next;
-      this.catalog.checkpoint(drive, info.journal, cursor);
+      if (this.closed || this.cancelled?.has(drive)) return false;
+      if (!finished) {
+        this.sessions.set(drive, { phase: "building", processed,
+          message: `已扫描 ${processed.toLocaleString("zh-CN")} 条文件记录` });
+        this.notify();
+        return true;
+      }
     }
     const latest = info.next;
-    // Bound catch-up work so another selected volume can also make progress.
     for (let page = 0; page < 12 && !this.closed && !this.cancelled?.has(drive); page++) {
       if (BigInt(cursor) >= BigInt(latest)) break;
       const batch = await this.reader.request("read", drive, info.volume, info.journal, cursor);
       if (!batch.next || BigInt(batch.next) < BigInt(cursor)) throw new Error("USN 读取进度无效。");
       const paths = this.catalog.changedPaths(drive, batch.rows);
       if (paths.length) await this.onPaths(drive, paths);
-      if (this.closed || this.cancelled?.has(drive)) return;
+      if (this.closed || this.cancelled?.has(drive)) return false;
       if (this.catalog.shouldRebuild(drive, batch.rows)) {
         this.sessions.set(drive, { phase: "rebuild" });
         this.notify();
-        return;
+        return true;
       }
       this.catalog.apply(drive, batch.rows, false, info.journal, batch.next);
       if (batch.next === cursor) throw new Error("USN 读取进度未前进。");
       cursor = batch.next;
     }
-    if (this.closed || this.cancelled?.has(drive)) return;
+    if (this.closed || this.cancelled?.has(drive)) return false;
     const phase = BigInt(cursor) >= BigInt(latest) ? "ready" : "catching-up";
     this.sessions.set(drive, { phase, journal: info.journal, cursor });
     if (phase !== live?.phase) this.notify();
+    return phase === "catching-up";
   }
 
   search(rawQuery) {
@@ -268,7 +295,7 @@ class NtfsSearch {
     const matches = [];
     for (const driveEntry of this.catalog.drives()) {
       const { drive } = driveEntry;
-      const live = Boolean(this.reader && !this.reader.closed && this.sessions.get(drive)?.phase === "ready");
+      const live = Boolean(this.reader && !this.reader.closed && ["ready", "building"].includes(this.sessions.get(drive)?.phase));
       const cached = Boolean(!this.sessions.has(drive) && driveEntry.cursor && (!this.reader || this.reader.closed));
       if (!live && !cached) continue;
       matches.push(...this.catalog.search(drive, query).map((row) => ({
@@ -283,7 +310,7 @@ class NtfsSearch {
   target(value, id) {
     const drive = driveLetter(value);
     if (typeof id !== "string" || !/^\d{1,20}$/.test(id) || this.reader?.closed !== false ||
-        this.sessions.get(drive)?.phase !== "ready") return null;
+        !["ready", "building"].includes(this.sessions.get(drive)?.phase)) return null;
     return fullPath(this.catalog.item(drive, id)) ?? null;
   }
 
@@ -292,6 +319,7 @@ class NtfsSearch {
     this.closed = true;
     clearInterval(this.interval);
     clearInterval(this.searchKeyTimer);
+    clearTimeout(this.nextPoll);
     this.connecting?.abort();
     this.reader?.close();
     await this.tail;
