@@ -321,7 +321,14 @@ class NtfsCatalog {
   search(drive, query) {
     const terms = queryTerms(query);
     if (!terms.length) return [];
-    const primary = [...terms].sort((a, b) => b.length - a.length)[0];
+    const rawPrimary = [...terms].sort((a, b) => b.length - a.length)[0];
+    // Split explicit path queries so we can still use the indexed filename
+    // prefix instead of scanning every path on disk.
+    const pathParts = rawPrimary.replaceAll("/", "\\");
+    const separator = pathParts.lastIndexOf("\\");
+    const directoryHint = separator >= 0 ? pathParts.slice(0, separator) : "";
+    const primary = separator >= 0 ? pathParts.slice(separator + 1) : rawPrimary;
+    if (!primary) return [];
     const upper = primary + "\uffff";
     const columns = "SELECT i.id, i.parent, i.name, i.folded, i.pinyin, i.initials," +
       " p.path AS directory, i.directory AS isDirectory," +
@@ -348,7 +355,11 @@ class NtfsCatalog {
       return { where: clauses.join(" AND ") || "1", args };
     }
 
-    const others = filters(terms.filter((term) => term !== primary));
+    const others = filters(terms.filter((term) => term !== rawPrimary));
+    if (directoryHint) {
+      others.where += (others.where === "1" ? "" : " AND ") + "instr(p.folded, ?) > 0";
+      others.args.push(directoryHint);
+    }
     const results = [];
     const seen = new Set();
     const applicationData = this.applicationData;
