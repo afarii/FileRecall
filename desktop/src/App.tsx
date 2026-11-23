@@ -66,7 +66,7 @@ export default function App() {
   }, [view, refreshFolders]);
 
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: number | undefined;
     const unsubscribe = window.fileRecall.onChanged(() => {
       if (timer !== undefined) window.clearTimeout(timer);
       timer = window.setTimeout(() => {
