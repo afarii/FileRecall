@@ -136,6 +136,10 @@ class FileIndex {
     this.db.exec("CREATE INDEX IF NOT EXISTS files_identity ON files(file_identity, status) WHERE file_identity IS NOT NULL");
     this.db.exec("CREATE INDEX IF NOT EXISTS files_pinyin ON files(name_pinyin)");
     this.db.exec("CREATE INDEX IF NOT EXISTS files_initials ON files(name_initials)");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS file_usage (
+      file_key TEXT PRIMARY KEY, use_count INTEGER NOT NULL DEFAULT 0,
+      last_used_at INTEGER NOT NULL DEFAULT 0
+    )`);
   }
 
   roots() {
@@ -471,6 +475,16 @@ class FileIndex {
     return rows.length;
   }
 
+  recordUse(path) {
+    const row = this.db.prepare("SELECT path, file_identity, identity_verified FROM files WHERE path = ?").get(path);
+    if (!row) return;
+    const key = row.identity_verified === 1 && row.file_identity
+      ? "id:" + row.file_identity : "path:" + row.path;
+    this.db.prepare(`INSERT INTO file_usage(file_key, use_count, last_used_at) VALUES (?, 1, ?)
+      ON CONFLICT(file_key) DO UPDATE SET
+        use_count = use_count + 1, last_used_at = excluded.last_used_at`).run(key, Date.now());
+  }
+
   search(rawQuery = "") {
     const query = typeof rawQuery === "string" ? rawQuery.trim().slice(0, 200) : "";
     const terms = queryTerms(query);
@@ -488,6 +502,7 @@ class FileIndex {
       " " + CURRENT_PATH + " AS currentPath, " + POSSIBLE_PATH + " AS possiblePath," +
       " coalesce(" + textMatch + ", 0) AS textMatched," +
       " coalesce(file_annotations.favorite, 0) AS favorite," +
+      " coalesce(file_usage.use_count, 0) AS useCount, coalesce(file_usage.last_used_at, 0) AS lastUsedAt," +
       " coalesce(instr(file_annotations.search_text, ?), 0) > 0 AND ? <> '' AS annotationMatched," +
       " CASE WHEN lower(files.name) = ? THEN 0" +
       " WHEN instr(lower(files.name), ?) = 1 THEN 1" +
@@ -497,9 +512,13 @@ class FileIndex {
       " ELSE 5 END AS matchRank" +
       " FROM files " +
       (searchText ? " LEFT JOIN file_text ON file_text.path = files.path " : " ") +
+      " LEFT JOIN file_usage ON file_usage.file_key = CASE WHEN files.identity_verified = 1 AND files.file_identity IS NOT NULL" +
+      " THEN 'id:' || files.file_identity ELSE 'path:' || files.path END" +
       " LEFT JOIN file_annotations ON file_annotations.file_identity = files.file_identity" +
       " AND files.identity_verified = 1 WHERE " + selection +
-      " ORDER BY matchRank, favorite DESC," +
+      " ORDER BY CASE WHEN coalesce(file_usage.use_count, 0) >= 3 THEN 0" +
+      " WHEN coalesce(file_usage.use_count, 0) >= 1 THEN 1 ELSE 2 END," +
+      " matchRank, favorite DESC, coalesce(file_usage.last_used_at, 0) DESC," +
       " CASE WHEN status = 'present' OR currentPath IS NOT NULL THEN 0 ELSE 1 END," +
       " last_seen_at DESC LIMIT 500"
     ).all(...(searchText ? [query.toLowerCase()] : []),
