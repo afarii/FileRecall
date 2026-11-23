@@ -4,6 +4,7 @@ const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, ne
 const { existsSync } = require("node:fs");
 const { lstat } = require("node:fs/promises");
 const { join } = require("node:path");
+const { setInterval: every, clearInterval: stopEvery } = require("node:timers");
 const { setInterval, clearInterval } = require("node:timers");
 const { FileIndex } = require("./indexer.cjs");
 const { DirectoryMonitor } = require("./monitor.cjs");
@@ -351,18 +352,18 @@ app.whenReady().then(() => {
   monitor.start();
   // Existing authorized-folder indexes migrate in bounded background batches.
   let searchKeyRounds = 0;
-  searchKeyTimer = setInterval(() => {
+  searchKeyTimer = every(() => {
     if (closing || !index) return;
     try {
       const updated = index.backfillSearchKeys(250);
       if (!updated) {
-        clearInterval(searchKeyTimer);
+        stopEvery(searchKeyTimer);
         searchKeyTimer = undefined;
       } else if (++searchKeyRounds % 12 === 0) {
         notifyChanged();
       }
     } catch {
-      clearInterval(searchKeyTimer);
+      stopEvery(searchKeyTimer);
       searchKeyTimer = undefined;
     }
   }, 100);
@@ -381,7 +382,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", (event) => {
   if (!closing) {
-    clearInterval(searchKeyTimer);
+    stopEvery(searchKeyTimer);
     hotkey?.close();
     semantic?.clear();
     aria2?.close();
