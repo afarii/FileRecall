@@ -160,6 +160,7 @@ app.whenReady().then(() => {
     try {
       if ((await lstat(path)).isSymbolicLink() || ntfs.target(drive, id) !== path) return false;
       shell.showItemInFolder(path);
+      ntfs.catalog.recordUse(drive, id);
       return true;
     } catch {
       return false;
@@ -330,12 +331,14 @@ app.whenReady().then(() => {
     const target = await fileTarget(path);
     if (!target) return unavailableFile;
     shell.showItemInFolder(target);
+    index.recordUse(path);
     return { ok: true };
   });
   ipcMain.handle("files:open", async (_event, path) => {
     const target = await fileTarget(path);
     if (!target) return unavailableFile;
     const error = await shell.openPath(target);
+    if (!error) index.recordUse(path);
     return error ? { ok: false, message: "系统无法打开此文件。" } : { ok: true };
   });
   ipcMain.handle("files:copy-path", async (_event, kind, key) => {
