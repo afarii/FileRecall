@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, net, Notification, safeStorage, shell, Tray } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, Notification, safeStorage, shell, Tray } = require("electron");
 const { existsSync } = require("node:fs");
 const { lstat } = require("node:fs/promises");
 const { join } = require("node:path");
@@ -19,6 +19,8 @@ const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { NtfsSearch } = require("./ntfs-search.cjs");
 const { createSearchService } = require("./search-service.cjs");
 const { readMotw } = require("./motw.cjs");
+const appIconDataURL = require("./app-icon.cjs");
+const appIcon = () => nativeImage?.createFromDataURL(appIconDataURL);
 
 let window;
 let index;
@@ -74,7 +76,7 @@ function focusSearch() {
 function createTray() {
   let icon;
   try {
-    icon = new Tray(join(__dirname, "tray-icon.ico"));
+    icon = new Tray(appIcon() ?? join(__dirname, "tray-icon.ico"));
     icon.setToolTip("FileRecall");
     icon.setContextMenu(Menu.buildFromTemplate([
       { label: "打开 FileRecall", click: showWindow },
@@ -98,6 +100,7 @@ function createWindow() {
     minHeight: 520,
     title: "FileRecall",
     backgroundColor: "#ffffff",
+    icon: appIcon(),
     ...(process.platform === "win32" ? {
       titleBarStyle: "hidden",
       titleBarOverlay: { color: "#ffffff", symbolColor: "#526175", height: 52 },
