@@ -289,15 +289,21 @@ class NtfsSearch {
     return phase === "catching-up";
   }
 
+  searchableDrives() {
+    return this.catalog.drives().flatMap(({ drive, cursor }) => {
+      const live = Boolean(this.reader && !this.reader.closed &&
+        ["ready", "building"].includes(this.sessions.get(drive)?.phase));
+      const cached = Boolean(!this.sessions.has(drive) && cursor &&
+        (!this.reader || this.reader.closed));
+      return live || cached ? [{ drive, cached }] : [];
+    });
+  }
+
   search(rawQuery) {
     const query = typeof rawQuery === "string" ? rawQuery.trim().slice(0, 200) : "";
     if (!query) return [];
     const matches = [];
-    for (const driveEntry of this.catalog.drives()) {
-      const { drive } = driveEntry;
-      const live = Boolean(this.reader && !this.reader.closed && ["ready", "building"].includes(this.sessions.get(drive)?.phase));
-      const cached = Boolean(!this.sessions.has(drive) && driveEntry.cursor && (!this.reader || this.reader.closed));
-      if (!live && !cached) continue;
+    for (const { drive, cached } of this.searchableDrives()) {
       matches.push(...this.catalog.search(drive, query).map((row) => ({
         id: row.id, drive, path: fullPath(row), name: row.name,
         directory: Boolean(row.isDirectory), cached,
