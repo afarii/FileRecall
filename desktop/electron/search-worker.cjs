@@ -33,7 +33,13 @@ parentPort.on("message", ({ id, kind, query, drives }) => {
   const started = performance.now();
   try {
     let files;
-    if (kind === "local") {
+    if (kind === "shutdown") {
+      local?.db.close();
+      ntfs?.db.close();
+      local = undefined;
+      ntfs = undefined;
+      files = [];
+    } else if (kind === "local") {
       files = localReader().search(query);
     } else if (kind === "ntfs") {
       const catalog = ntfsReader();
