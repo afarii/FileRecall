@@ -399,7 +399,7 @@ class NtfsCatalog {
       const documentType = /\\\\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv)$/i;
       for (const row of matches) {
         const name = row.folded || row.name.toLowerCase();
-        const chinese = /[\\p{Script=Han}]/u.test(row.name);
+        const chinese = /\p{Script=Han}/u.test(row.name);
         let score = Math.min(900, Math.log2(1 + row.useCount) * 220);
         if (name === query) score += 700;
         else if (name.startsWith(primary)) score += 280;
