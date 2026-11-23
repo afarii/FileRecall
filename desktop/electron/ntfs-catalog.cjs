@@ -13,7 +13,11 @@ const REPARSE = 0x400;
 
 const prefix = (path) => path.endsWith("\\") ? path : path + "\\";
 const below = (path, root) => path.toLowerCase().startsWith(prefix(root).toLowerCase());
-const fullPath = (row) => row && win32.join(row.directory, row.name);
+const fullPath = (row) => row && row.directory ? win32.join(row.directory, row.name) : null;
+const isRootId = (id) => {
+  try { return (BigInt(id) & 0x0000ffffffffffffn) === 5n; }
+  catch { return false; }
+};
 
 class NtfsCatalog {
   constructor(path, applicationData) {
@@ -43,6 +47,9 @@ class NtfsCatalog {
     if (!columns.has("initials")) this.db.exec("ALTER TABLE ntfs_item ADD COLUMN initials TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_item_pinyin ON ntfs_item(drive, pinyin)");
     this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_item_initials ON ntfs_item(drive, initials)");
+    const driveColumns = new Set(this.db.prepare("PRAGMA table_info(ntfs_drive)").all().map((entry) => entry.name));
+    if (!driveColumns.has("build_position")) this.db.exec("ALTER TABLE ntfs_drive ADD COLUMN build_position TEXT");
+    if (!driveColumns.has("build_journal")) this.db.exec("ALTER TABLE ntfs_drive ADD COLUMN build_journal TEXT");
   }
 
   transaction(action) {
@@ -63,7 +70,7 @@ class NtfsCatalog {
 
   enable(drive, volume) {
     this.transaction(() => {
-      this.db.prepare("INSERT OR IGNORE INTO ntfs_drive VALUES (?, ?, NULL, NULL)").run(drive, volume);
+      this.db.prepare("INSERT OR IGNORE INTO ntfs_drive (drive, volume, journal, cursor) VALUES (?, ?, NULL, NULL)").run(drive, volume);
       this.db.prepare("DELETE FROM ntfs_excluded_drive WHERE drive = ?").run(drive);
     });
   }
@@ -81,16 +88,59 @@ class NtfsCatalog {
     });
   }
 
-  beginBuild(drive) {
+  beginBuild(drive, journal) {
+    const state = this.db.prepare("SELECT build_position, build_journal FROM ntfs_drive WHERE drive = ?").get(drive);
+    if (state?.build_journal === journal && state.build_position !== null) return state.build_position;
     this.transaction(() => {
-      this.db.prepare("UPDATE ntfs_drive SET cursor = NULL, journal = NULL WHERE drive = ?").run(drive);
+      this.db.prepare("UPDATE ntfs_drive SET cursor = NULL, journal = NULL, build_position = '0', build_journal = ? WHERE drive = ?")
+        .run(journal, drive);
       this.discardRows(drive);
     });
+    return "0";
+  }
+
+  // Materialize parent directory paths once per completed volume snapshot.
+  // No per-file OpenFileById, ACL call, or Windows path lookup is needed.
+  finishBuild(drive) {
+    const entries = this.db.prepare(
+      "SELECT id, parent, name FROM ntfs_item WHERE drive = ? AND directory = 1"
+    ).all(drive);
+    const dirs = new Map(entries.map((entry) => [entry.id, entry]));
+    const known = new Map();
+    const visiting = new Set();
+    const root = drive + ":\\";
+    const resolve = (id, depth = 0) => {
+      if (isRootId(id)) return root;
+      if (known.has(id)) return known.get(id);
+      if (visiting.has(id) || depth > 256) return null;
+      const entry = dirs.get(id);
+      if (!entry) return null;
+      visiting.add(id);
+      const parent = resolve(entry.parent, depth + 1);
+      visiting.delete(id);
+      const path = parent ? win32.join(parent, entry.name) : null;
+      known.set(id, path);
+      return path;
+    };
+    this.transaction(() => {
+      const save = this.db.prepare(`
+        INSERT INTO ntfs_parent (drive, id, path, folded) VALUES (?, ?, ?, ?)
+        ON CONFLICT (drive, id) DO UPDATE SET path = excluded.path, folded = excluded.folded
+      `);
+      for (const entry of entries) {
+        const path = resolve(entry.id);
+        if (path) save.run(drive, entry.id, path, path.toLowerCase());
+      }
+    });
+    return entries.length;
   }
 
   checkpoint(drive, journal, cursor) {
-    this.db.prepare("UPDATE ntfs_drive SET journal = ?, cursor = ? WHERE drive = ? AND (journal IS NOT ? OR cursor IS NOT ?)")
-      .run(journal, cursor, drive, journal, cursor);
+    this.db.prepare(`
+      UPDATE ntfs_drive
+      SET journal = ?, cursor = ?, build_position = NULL, build_journal = NULL
+      WHERE drive = ?
+    `).run(journal, cursor, drive);
   }
 
   item(drive, id) {
@@ -102,8 +152,12 @@ class NtfsCatalog {
   }
 
   visible(drive, row) {
-    if (!row.directory || !row.name || !below(win32.normalize(row.directory), drive + ":\\")
-      || /[\\/:\x00-\x1f]/.test(row.name) || [".", ".."].includes(row.name) || row.attributes & REPARSE) return false;
+    if (!row.name || /[\\/:\x00-\x1f]/.test(row.name) ||
+        [".", ".."].includes(row.name) || row.attributes & REPARSE) return false;
+    // Empty parent path is intentional for a raw MFT snapshot. The parent FRN
+    // is resolved in bulk after enumeration, rather than opening the directory.
+    if (row.directory === "") return true;
+    if (!row.directory || !below(win32.normalize(row.directory), drive + ":\\")) return false;
     const path = fullPath(row).toLowerCase();
     return path !== this.applicationData && !below(path, this.applicationData);
   }
@@ -122,7 +176,7 @@ class NtfsCatalog {
   }
 
   apply(drive, rows, snapshot, journal, cursor) {
-    if (!rows.length) return;
+    if (!rows.length && !(snapshot && cursor !== undefined)) return;
     this.transaction(() => {
       const saveParent = this.db.prepare(`
         INSERT INTO ntfs_parent VALUES (?, ?, ?, ?)
@@ -152,12 +206,24 @@ class NtfsCatalog {
         }
         const directory = Boolean(row.attributes & DIRECTORY);
         if (old?.isDirectory && fullPath(old) !== fullPath(row)) this.updateSubtree(drive, fullPath(old), fullPath(row));
-        const parent = win32.normalize(row.directory);
-        const parentChanged = saveParent.run(drive, row.parent, parent, parent.toLowerCase()).changes;
+        let parentChanged = 0;
+        if (row.directory) {
+          const parent = win32.normalize(row.directory);
+          parentChanged = saveParent.run(drive, row.parent, parent, parent.toLowerCase()).changes;
+        } else if (snapshot && isRootId(row.parent)) {
+          // The NTFS root (MFT entry 5) is deliberately omitted from enumeration.
+          // Preserve the root path so files immediately below C:\\ remain searchable.
+          const root = drive + ":\\";
+          parentChanged = saveParent.run(drive, row.parent, root, root.toLowerCase()).changes;
+        }
         const keys = nameSearchKeys(row.name);
         const itemChanged = saveItem.run(drive, row.id, row.parent, row.name, row.name.toLowerCase(),
           Number(directory), keys.pinyin, keys.initials).changes;
         changed = Boolean(parentChanged || itemChanged) || changed;
+      }
+      if (snapshot && cursor !== undefined) {
+        // Same transaction as the rows: crash recovery resumes at an exact MFT cursor.
+        this.db.prepare("UPDATE ntfs_drive SET build_position = ? WHERE drive = ?").run(cursor, drive);
       }
       if (changed && !snapshot) this.checkpoint(drive, journal, cursor);
     });
@@ -246,6 +312,8 @@ class NtfsCatalog {
     function collect(rows) {
       for (const row of rows) {
         if (seen.has(row.id)) continue;
+        const path = fullPath(row)?.toLowerCase();
+        if (!path || path === this.applicationData || below(path, this.applicationData)) continue;
         seen.add(row.id);
         results.push(row);
         if (results.length === 100) break;
