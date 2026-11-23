@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChromeConnection from "./ChromeConnection";
 import Aria2Connection from "./Aria2Connection";
 import HotkeySettings from "./HotkeySettings";
@@ -24,12 +24,18 @@ export default function App() {
   const [ntfsCount, setNtfsCount] = useState(0);
   const selectedButton = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [expandedResults, setExpandedResults] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchQuery(query), query.trim() ? 110 : 0);
+    return () => window.clearTimeout(timer);
+  }, [query]);
   const [mode, setMode] = useState<"literal" | "semantic">("literal");
   const searchInput = useRef<HTMLInputElement | null>(null);
   const resultPane = useRef<HTMLElement | null>(null);
   const semantic = useSemanticSearch();
-  const currentQuery = useRef(query);
-  currentQuery.current = query;
+  const currentQuery = useRef(searchQuery);
+  currentQuery.current = searchQuery;
   const reloadVersion = useRef(0);
   const [busy, setBusy] = useState(false);
   const [textEnabled, setTextEnabled] = useState<boolean>();
@@ -39,24 +45,39 @@ export default function App() {
 
   const reload = useCallback(async (search: string) => {
     const version = ++reloadVersion.current;
-    const [nextFiles, nextFolders, nextHistoryFolders] = await Promise.all([
-      window.fileRecall.search(search),
-      window.fileRecall.folders(),
-      window.fileRecall.historyFolders(),
-    ]);
+    const nextFiles = await window.fileRecall.search(search);
     if (version !== reloadVersion.current || search !== currentQuery.current) return;
     setLocalResult({ query: search, files: nextFiles });
+  }, []);
+  const refreshFolders = useCallback(async () => {
+    const [nextFolders, nextHistoryFolders] = await Promise.all([
+      window.fileRecall.folders(), window.fileRecall.historyFolders(),
+    ]);
     setFolders(nextFolders);
     setHistoryFolders(nextHistoryFolders);
   }, []);
 
   useEffect(() => {
-    reload(query).catch((err) => setError(String(err)));
-  }, [reload, query]);
+    if (mode === "literal") void reload(searchQuery).catch((err) => setError(String(err)));
+  }, [reload, searchQuery, mode]);
 
-  useEffect(() => window.fileRecall.onChanged(() => {
-    reload(currentQuery.current).catch((err) => setError(String(err)));
-  }), [reload]);
+  useEffect(() => {
+    if (view === "folders") void refreshFolders().catch((err) => setError(String(err)));
+  }, [view, refreshFolders]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = window.fileRecall.onChanged(() => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (mode === "literal") void reload(currentQuery.current).catch((err) => setError(String(err)));
+        if (view === "folders") void refreshFolders().catch((err) => setError(String(err)));
+      }, 250);
+    });
+    return () => { if (timer !== undefined) window.clearTimeout(timer); unsubscribe(); };
+  }, [reload, refreshFolders, mode, view]);
+
+  useEffect(() => { setExpandedResults(false); }, [searchQuery, filter]);
 
   useEffect(() => {
     window.fileRecall.textEnabled().then(setTextEnabled).catch(() => setError("无法读取正文搜索设置。"));
@@ -81,14 +102,15 @@ export default function App() {
   useEffect(() => {
     let active = true;
     const timer = window.setTimeout(() => {
-      window.fileRecall.downloads(query, downloadManager).then((files) => {
-        if (active) setBrowserResult({ query, files, manager: downloadManager });
+      if (mode === "semantic") return;
+      window.fileRecall.downloads(searchQuery, downloadManager).then((files) => {
+        if (active) setBrowserResult({ query: searchQuery, files, manager: downloadManager });
       }).catch(() => {
-        if (active) setBrowserResult({ query, files: [], manager: downloadManager, error: "读取下载记录失败，请重试。" });
+        if (active) setBrowserResult({ query: searchQuery, files: [], manager: downloadManager, error: "读取下载记录失败，请重试。" });
       });
-    }, query ? 150 : 0);
+    }, searchQuery ? 80 : 0);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [query, downloadRefresh, downloadManager]);
+  }, [searchQuery, downloadRefresh, downloadManager, mode]);
 
   const closeDetails = useCallback(() => {
     setSelected(null);
@@ -123,6 +145,7 @@ export default function App() {
       setTextEnabled(enabled);
       setNotice(enabled ? "已开启正文搜索，授权目录会自动重扫。" : "已关闭正文搜索并清除正文索引。");
       await reload(currentQuery.current);
+      await refreshFolders();
     } catch {
       setError("无法更新正文搜索设置，请重试。");
     } finally {
@@ -153,6 +176,7 @@ export default function App() {
       setNotice(`已索引 ${totals.indexed} 个文件；新增丢失记录 ${totals.missing} 个。` +
         (problems.length ? ` ${problems.length} 个目录扫描不完整，暂缓判定其中的文件丢失。` : ""));
       await reload(currentQuery.current);
+      await refreshFolders();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -178,6 +202,7 @@ export default function App() {
       semantic.invalidate();
       setNotice(`已停止索引 ${path}，历史记录仍可搜索。`);
       await reload(currentQuery.current);
+      await refreshFolders();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -195,6 +220,7 @@ export default function App() {
       setClearingFolder(null);
       setNotice(`已清除 ${removed} 条历史记录，磁盘文件保留。`);
       await reload(currentQuery.current);
+      await refreshFolders();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -203,22 +229,22 @@ export default function App() {
   }
 
 
-  const local = localResult?.query === query ? localResult : undefined;
-  const browser = browserResult?.query === query && browserResult.manager === downloadManager ? browserResult : undefined;
+  const local = localResult?.query === searchQuery ? localResult : undefined;
+  const browser = browserResult?.query === searchQuery && browserResult.manager === downloadManager ? browserResult : undefined;
   const semanticMode = mode === "semantic";
   const semanticResult = semantic.result?.query === query ? semantic.result.result : undefined;
   const downloadsOnly = filter === "chrome" || filter === "aria2" || filter === "trusted" || filter === "candidate";
   const localOnly = filter === "local" || filter === "favorites";
   const localFiles = semanticMode ? (semanticResult?.files ?? []) : (downloadsOnly ? [] : (local?.files ?? []));
-  const localRecords: SearchRecord[] = localFiles
+  const localRecords: SearchRecord[] = useMemo(() => localFiles
     .filter((file) => semanticMode || filter !== "missing" || (file.status === "missing" && !file.currentPath))
     .filter((file) => semanticMode || filter !== "favorites" || file.favorite === 1)
-    .map((file) => ({ type: "local", file }));
-  const downloadRecords = (semanticMode || localOnly ? [] : (browser?.files ?? []))
+    .map((file): SearchRecord => ({ type: "local", file })), [localFiles, filter, semanticMode]);
+  const downloadRecords: SearchRecord[] = useMemo(() => (semanticMode || localOnly ? [] : (browser?.files ?? []))
     .filter((file) => filter !== "missing" || file.pathStatus === "missing")
     .filter((file) => filter !== "trusted" || (file.manager === "chrome" && file.canOpenSource))
     .filter((file) => filter !== "candidate" || file.sourceStatus === "candidate")
-    .map((file): SearchRecord => ({ type: "download", file }));
+    .map((file): SearchRecord => ({ type: "download", file })), [browser, semanticMode, localOnly, filter]);
   const selectedRecord = [...localRecords, ...downloadRecords].find((record) => recordKey(record) === selected);
   const hasResults = localRecords.length + downloadRecords.length + ntfsCount > 0;
   const loading = (!error && !downloadsOnly && !local) || (!localOnly && !browser);
@@ -228,13 +254,13 @@ export default function App() {
     if (!records.length) return null;
     return <section className="results-group" aria-label={title}>
       <h2>{title} <span>{records.length} 条</span></h2>
-      {records.map((record) => {
+      {records.slice(0, expandedResults ? 500 : 60).map((record) => {
         const { file } = record;
         const key = recordKey(record);
         const status = recordStatus(record);
         const subtitle = record.type === "local" ? (record.file.currentPath || file.path)
           : (record.file.domain || file.path);
-        const needle = query.trim().toLowerCase();
+        const needle = searchQuery.trim().toLowerCase();
         const sourceMatched = record.type === "download" && needle.length > 0
           && [record.file.domain, record.file.sourceTitle].some((value) => value.toLowerCase().includes(needle));
         return <button type="button" className="result-row" key={key} aria-expanded={selected === key}
@@ -262,6 +288,10 @@ export default function App() {
           <span className={`badge ${status.tone}`}>{record.type === "local" && record.file.favorite === 1 ? "★ " : ""}{status.label}</span>
         </button>;
       })}
+      {records.length > 60 && !expandedResults &&
+        <button type="button" className="secondary show-more" onClick={() => setExpandedResults(true)}>
+          显示更多（共 {records.length} 条）
+        </button>}
     </section>;
   }
 
@@ -299,7 +329,7 @@ export default function App() {
             </svg>
             <input type="search" ref={searchInput} aria-label="搜索文件和来源"
               placeholder={semanticMode ? "用一句话描述你记得的内容" : "文件名、全拼、首字母、扩展名组合或来源，例如 pdf sybg"}
-              value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); }}
+              value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); setExpandedResults(false); }}
               onKeyDown={(event) => {
                 if (event.key !== "ArrowDown") return;
                 const first = resultPane.current?.querySelector<HTMLButtonElement>(".result-row");
@@ -332,10 +362,10 @@ export default function App() {
           {error && <p className="error" role="alert">{error}</p>}
           {!semanticMode && browser?.error && !localOnly && <p className="error" role="alert">{browser.error}</p>}
           {!semanticMode && !hasResults && loading && <p className="empty" role="status">正在搜索…</p>}
-          {!semanticMode && !hasResults && !loading && <p className="empty">{query.trim() || filter !== "all" ? "没有找到匹配的记录。" :
+          {!semanticMode && !hasResults && !loading && <p className="empty">{searchQuery.trim() || filter !== "all" ? "没有找到匹配的记录。" :
             <>暂无文件记录。<button className="secondary" onClick={() => setView("folders")}>管理授权目录</button></>}</p>}
           {renderRecords(localRecords, semanticMode ? "相近内容" : "本地文件")}
-           <NtfsQuickResults query={query} enabled={!semanticMode && (filter === "all" || filter === "local")}
+           <NtfsQuickResults query={searchQuery} enabled={!semanticMode && (filter === "all" || filter === "local") && query === searchQuery}
              existingPaths={localFiles.filter((file) => file.status === "present" || Boolean(file.currentPath))
                .map((file) => file.currentPath || file.path)} onCount={setNtfsCount} onSelect={() => setSelected(null)} />
           {renderRecords(downloadRecords.filter((record) => record.type === "download" && record.file.manager === "chrome"), "Chrome 下载")}
