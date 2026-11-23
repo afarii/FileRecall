@@ -47,6 +47,11 @@ class NtfsCatalog {
     if (!columns.has("initials")) this.db.exec("ALTER TABLE ntfs_item ADD COLUMN initials TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_item_pinyin ON ntfs_item(drive, pinyin)");
     this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_item_initials ON ntfs_item(drive, initials)");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS ntfs_usage (
+      drive TEXT NOT NULL, id TEXT NOT NULL,
+      use_count INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (drive, id)
+    ) WITHOUT ROWID`);
     const driveColumns = new Set(this.db.prepare("PRAGMA table_info(ntfs_drive)").all().map((entry) => entry.name));
     if (!driveColumns.has("build_position")) this.db.exec("ALTER TABLE ntfs_drive ADD COLUMN build_position TEXT");
     if (!driveColumns.has("build_journal")) this.db.exec("ALTER TABLE ntfs_drive ADD COLUMN build_journal TEXT");
@@ -298,6 +303,14 @@ class NtfsCatalog {
     return rows.length;
   }
 
+  recordUse(drive, id) {
+    if (!this.item(drive, id)) return;
+    this.db.prepare(`INSERT INTO ntfs_usage(drive, id, use_count, last_used_at)
+      VALUES (?, ?, 1, ?) ON CONFLICT(drive, id) DO UPDATE SET
+      use_count = use_count + 1, last_used_at = excluded.last_used_at`)
+      .run(drive, id, Date.now());
+  }
+
   search(drive, query) {
     const terms = queryTerms(query);
     if (!terms.length) return [];
@@ -342,9 +355,22 @@ class NtfsCatalog {
       }
     }
 
-    // Separate indexed range scans avoid sorting huge sets when the prefix is common.
+    // Look up the tiny set of files the user has actually used before broad name searches.
+    // This keeps familiar files visible even when a short prefix matches thousands of system files.
+    const usedFilters = filters(terms);
+    const frequent = this.db.prepare(columns +
+      " FROM ntfs_usage u JOIN ntfs_item i ON i.drive = u.drive AND i.id = u.id" +
+      " LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent" +
+      " WHERE u.drive = ? AND " + usedFilters.where +
+      " ORDER BY u.use_count DESC, u.last_used_at DESC LIMIT 40")
+      .all(drive, ...usedFilters.args);
+    collect(frequent);
+
+    // Very short romanized queries are often Chinese filename initials (e.g. sy -> 实验).
+    // Keep indexed prefix scans so typing remains responsive on large volumes.
     const columnsToTry = /^[a-z0-9]+$/u.test(primary)
-      ? ["i.folded", "i.pinyin", "i.initials"] : ["i.folded"];
+      ? (primary.length <= 2 ? ["i.initials", "i.folded", "i.pinyin"]
+        : ["i.folded", "i.pinyin", "i.initials"]) : ["i.folded"];
     for (const column of columnsToTry) {
       if (results.length >= 100) break;
       const sql = columns + " " + from + " WHERE i.drive = ? AND " +
