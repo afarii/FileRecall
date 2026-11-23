@@ -17,6 +17,7 @@ const { createProvenance } = require("./provenance.cjs");
 const { createAria2Connection } = require("./aria2-connection.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { NtfsSearch } = require("./ntfs-search.cjs");
+const { createSearchService } = require("./search-service.cjs");
 const { readMotw } = require("./motw.cjs");
 
 let window;
@@ -27,6 +28,7 @@ let semantic;
 let aria2;
 let updates;
 let ntfs;
+let searches;
 let ntfsClosing;
 let searchKeyTimer;
 let updateNotification;
@@ -148,13 +150,19 @@ app.whenReady().then(() => {
       }
     }
   }
+  searches = createSearchService({
+    localDatabase: databasePath,
+    ntfsDatabase: ntfs ? join(userData, "ntfs-index.sqlite") : null,
+    applicationData: userData,
+  });
   const ntfsStatus = () => ntfs?.status() ?? { available: false, connected: false, drives: [] };
   ipcMain.handle("ntfs:status", ntfsStatus);
   ipcMain.handle("ntfs:connect", () => ntfs?.reconnect() ?? ntfsStatus());
   ipcMain.handle("ntfs:retry-auto", async () => { await ntfs?.retryAutomatically(); return ntfsStatus(); });
   ipcMain.handle("ntfs:enable", (_event, drive) => ntfs?.enable(drive) ?? ntfsStatus());
   ipcMain.handle("ntfs:disable", (_event, drive) => ntfs?.disable(drive) ?? ntfsStatus());
-  ipcMain.handle("ntfs:search", (_event, query) => ntfs?.search(query) ?? []);
+  ipcMain.handle("ntfs:search", (_event, query) => ntfs
+    ? searches.searchNtfs(query, ntfs.searchableDrives()) : []);
   ipcMain.handle("ntfs:motw", async (_event, drive, id) => {
     const path = ntfs?.target(drive, id);
     return path ? readMotw(path) : null;
@@ -312,7 +320,7 @@ app.whenReady().then(() => {
     }
     return results;
   }));
-  ipcMain.handle("files:search", (_event, query) => index.search(query));
+  ipcMain.handle("files:search", (_event, query) => searches.searchLocal(query));
   ipcMain.handle("files:motw", (_event, path) => index.motwEvidence(path));
   ipcMain.handle("files:text-enabled", () => index.textEnabled());
   ipcMain.handle("files:set-text-enabled", (_event, enabled) => monitor.run(() => {
@@ -363,7 +371,7 @@ app.whenReady().then(() => {
   searchKeyTimer = every(() => {
     if (closing || !index) return;
     try {
-      const updated = index.backfillSearchKeys(250);
+      const updated = index.backfillSearchKeys(24);
       if (!updated) {
         stopEvery(searchKeyTimer);
         searchKeyTimer = undefined;
@@ -374,7 +382,7 @@ app.whenReady().then(() => {
       stopEvery(searchKeyTimer);
       searchKeyTimer = undefined;
     }
-  }, 100);
+  }, 350);
   searchKeyTimer.unref();
   // The window stays responsive while the read-only helper requests Windows authorization.
   if (ntfs) void ntfs.startAutomatically().catch(() => {});
@@ -402,7 +410,7 @@ app.on("before-quit", (event) => {
     event.preventDefault();
     if (closing) return;
     closing = true;
-    Promise.allSettled([monitor.close(), ntfsClosing]).then(() => {
+    Promise.allSettled([monitor.close(), ntfsClosing, searches?.close()]).then(() => {
       index?.close();
       index = undefined;
       quitReady = true;
