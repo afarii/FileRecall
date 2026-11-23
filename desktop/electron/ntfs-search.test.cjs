@@ -132,7 +132,11 @@ test("persisted MFT snapshot is searchable on restart and avoids a full enumerat
   const { tmpdir } = require("node:os");
   const { join } = require("node:path");
   const home = await mkdtemp(join(tmpdir(), "filerecall-reuse-test-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  let reopened;
+  t.after(async () => {
+    await reopened?.close();
+    await rm(home, { recursive: true, force: true });
+  });
   const database = join(home, "ntfs-index.sqlite");
   const calls = [];
   const makeReader = () => ({
@@ -162,8 +166,7 @@ test("persisted MFT snapshot is searchable on restart and avoids a full enumerat
   await first.close();
 
   calls.length = 0;
-  const reopened = new NtfsSearch(database, "E:\\\\AppData", "", options);
-  t.after(() => reopened.close());
+  reopened = new NtfsSearch(database, "E:\\\\AppData", "", options);
   assert.equal(reopened.status().drives[0].phase, "cached");
   assert.equal(reopened.search("sy")[0].cached, true);
   // Simulate UAC reconnect occurring before journal validation completes:
