@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import BrowserDownloads from "./BrowserDownloads";
-
-function formatSize(bytes: number) {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-}
+import ChromeConnection from "./ChromeConnection";
+import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } from "./FileDetails";
+import logo from "../../filerecall.svg";
 
 export default function App() {
-  const [view, setView] = useState<"files" | "downloads">("files");
+  const [view, setView] = useState<"files" | "folders">("files");
   const [folders, setFolders] = useState<IndexedFolder[]>([]);
   const [historyFolders, setHistoryFolders] = useState<Array<{ path: string; count: number }>>([]);
   const [clearingFolder, setClearingFolder] = useState<string | null>(null);
-  const [files, setFiles] = useState<FileRecord[]>([]);
+  const [localResult, setLocalResult] = useState<{ query: string; files: FileRecord[] }>();
+  const [browserResult, setBrowserResult] = useState<{ query: string; files: BrowserDownload[]; error?: string }>();
+  const [downloadRefresh, setDownloadRefresh] = useState(0);
+  const [filter, setFilter] = useState<"all" | "local" | "chrome" | "missing">("all");
+  const [selected, setSelected] = useState<string | null>(null);
+  const selectedButton = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
   const currentQuery = useRef(query);
   currentQuery.current = query;
@@ -20,7 +21,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [textEnabled, setTextEnabled] = useState<boolean>();
   const [changingText, setChangingText] = useState(false);
-  const [notice, setNotice] = useState("文件索引仅保存在本机。");
+  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
   const reload = useCallback(async (search: string) => {
@@ -31,7 +32,7 @@ export default function App() {
       window.fileRecall.historyFolders(),
     ]);
     if (version !== reloadVersion.current || search !== currentQuery.current) return;
-    setFiles(nextFiles);
+    setLocalResult({ query: search, files: nextFiles });
     setFolders(nextFolders);
     setHistoryFolders(nextHistoryFolders);
   }, []);
@@ -47,6 +48,49 @@ export default function App() {
   useEffect(() => {
     window.fileRecall.textEnabled().then(setTextEnabled).catch(() => setError("无法读取正文搜索设置。"));
   }, []);
+
+  const refreshDownloads = useCallback(() => setDownloadRefresh((value) => value + 1), []);
+
+  useEffect(() => {
+    window.addEventListener("focus", refreshDownloads);
+    return () => window.removeEventListener("focus", refreshDownloads);
+  }, [refreshDownloads]);
+
+  useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => {
+      window.fileRecall.downloads(query).then((files) => {
+        if (active) setBrowserResult({ query, files });
+      }).catch(() => {
+        if (active) setBrowserResult({ query, files: [], error: "读取 Chrome 下载记录失败，可在 Chrome 设置中重试。" });
+      });
+    }, query ? 150 : 0);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [query, downloadRefresh]);
+
+  const closeDetails = useCallback(() => {
+    setSelected(null);
+    selectedButton.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (!selected) return;
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === "Escape" && !event.defaultPrevented) closeDetails();
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [selected, closeDetails]);
+
+  async function openSource(id: string) {
+    setError("");
+    try {
+      if (!await window.fileRecall.openSource(id)) setError("此记录当前没有可打开的可信来源。");
+    } catch {
+      setError("无法打开来源页面，请重试。");
+    }
+  }
+
 
   async function changeText(enabled: boolean) {
     setChangingText(true);
@@ -117,8 +161,6 @@ export default function App() {
     }
   }
 
-  const missingCount = files.filter((file) => file.status === "missing" && !file.currentPath).length;
-
   async function clearHistory() {
     if (!clearingFolder) return;
     setBusy(true);
@@ -135,86 +177,123 @@ export default function App() {
     }
   }
 
-  return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">F</div>
-          <div><strong>FileRecall</strong><small>Desktop · v0.4 MVP</small></div>
-        </div>
-        <div className="section-label">文件来源</div>
-        <button className={view === "files" ? "nav-item active" : "nav-item"}
-          aria-pressed={view === "files"} onClick={() => setView("files")}>本地文件记忆</button>
-        <button className={view === "downloads" ? "nav-item active" : "nav-item"}
-          aria-pressed={view === "downloads"} onClick={() => setView("downloads")}>浏览器下载</button>
-        <div hidden={view !== "files"}>
-        <div className="section-label with-gap">已授权目录</div>
-        {folders.length === 0 ? <p className="sidebar-note">尚未选择扫描目录</p> :
-          folders.map((folder) => <div key={folder.path}>
-            <div className="folder" title={folder.path}>▣ &nbsp; {folder.path}</div>
-            <div className="folder-state" role="status">
-              {{ waiting: "等待扫描", scanning: "正在更新索引", watching: "自动监控中", retrying: "等待自动重试" }[folder.state]}
-              {folder.error && <p>{folder.error}</p>}
-            </div>
-            <button className="stop-indexing" disabled={busy} onClick={() => removeFolder(folder.path)} aria-label={`停止索引 ${folder.path}`}>停止索引</button>
-            <button className="stop-indexing" disabled={busy} onClick={() => setClearingFolder(folder.path)} aria-label={`停止并清除历史 ${folder.path}`}>停止并清除历史</button>
-          </div>)}
-        {historyFolders.some((history) => !folders.some((folder) => folder.path === history.path)) &&
-          <div className="section-label with-gap">已停止索引的历史</div>}
-        {historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path)).map((history) =>
-          <div key={history.path}>
-            <div className="folder" title={history.path}>{history.path}</div>
-            <button className="stop-indexing" disabled={busy} onClick={() => setClearingFolder(history.path)} aria-label={`清除历史 ${history.path}`}>清除历史（{history.count} 条）</button>
-          </div>)}
-        </div>
-        <div className="sidebar-bottom">仅扫描你主动选择的目录<br />默认不上传文件信息</div>
-      </aside>
-      <main>
-        <header className="topbar"><span>文件记忆库</span><span className="local-label">● &nbsp; 本地存储</span></header>
-        {view === "downloads" ? <BrowserDownloads /> : <div className="content">
-          <div className="heading-row">
-            <div><h1>找回你的文件</h1><p>即使文件已经删除，历史记录仍然保留。</p></div>
-            <div className="actions">
-              <button className="secondary" disabled={busy || folders.length === 0} onClick={() => perform(() => window.fileRecall.rescan())}>重新扫描</button>
-              <button disabled={busy} onClick={() => perform(() => window.fileRecall.addFolder())}>+ 添加文件夹</button>
-            </div>
+
+  const local = localResult?.query === query ? localResult : undefined;
+  const browser = browserResult?.query === query ? browserResult : undefined;
+  const localRecords: SearchRecord[] = (filter === "chrome" ? [] : (local?.files ?? []))
+    .filter((file) => filter !== "missing" || (file.status === "missing" && !file.currentPath))
+    .map((file) => ({ type: "local", file }));
+  const chromeRecords: SearchRecord[] = (filter === "local" ? [] : (browser?.files ?? []))
+    .filter((file) => filter !== "missing" || file.pathStatus === "missing")
+    .map((file) => ({ type: "chrome", file }));
+  const selectedRecord = [...localRecords, ...chromeRecords].find((record) => recordKey(record) === selected);
+  const hasResults = localRecords.length + chromeRecords.length > 0;
+  const loading = (!error && filter !== "chrome" && !local) || (filter !== "local" && !browser);
+  const pastFolders = historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path));
+
+  function renderRecords(records: SearchRecord[], title: string) {
+    if (!records.length) return null;
+    return <section className="results-group" aria-label={title}>
+      <h2>{title} <span>{records.length} 条</span></h2>
+      {records.map((record) => {
+        const { file } = record;
+        const key = recordKey(record);
+        const status = recordStatus(record);
+        const subtitle = record.type === "local" ? (record.file.currentPath || file.path)
+          : (record.file.domain || file.path);
+        return <button type="button" className="result-row" key={key} aria-expanded={selected === key}
+          aria-controls={selected === key ? "file-details" : undefined}
+          onClick={(event) => {
+            selectedButton.current = event.currentTarget;
+            setSelected(selected === key ? null : key);
+            setError("");
+          }}>
+          <FileTile name={file.name} />
+          <span className="result-copy"><strong>{file.name}</strong>
+            <span title={subtitle}>{subtitle}</span>
+            {record.type === "local" && record.file.textMatched === 1 && <small>正文匹配</small>}
+          </span>
+          <span className={`badge ${status.tone}`}>{status.label}</span>
+        </button>;
+      })}
+    </section>;
+  }
+
+  return <div className="app">
+    <header className="app-bar">
+      <span className="brand"><span className="brand-mark"><img src={logo} alt="" /></span>FileRecall</span>
+      <span className="muted">本地存储</span>
+    </header>
+    <main>
+      <nav className="app-nav" aria-label="主要功能">
+        <button aria-pressed={view === "files"} onClick={() => setView("files")}>搜索文件</button>
+        <button aria-pressed={view === "folders"} onClick={() => { setSelected(null); setView("folders"); }}>授权目录</button>
+        <ChromeConnection refresh={refreshDownloads} />
+      </nav>
+      {view === "files" ? <div className={`search-layout ${selectedRecord ? "with-details" : ""}`}>
+        <section className="search-content" aria-labelledby="search-heading">
+          <h1 id="search-heading">搜索文件</h1>
+          <label className="search-box">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+              <circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 4.4 4.4"/>
+            </svg>
+            <input type="search" aria-label="搜索文件和来源"
+              placeholder={textEnabled ? "文件名、路径、正文或来源" : "文件名、路径或来源"}
+              value={query} onChange={(event) => setQuery(event.target.value)} />
+          </label>
+          <div className="filters" role="group" aria-label="筛选搜索结果">
+            {([["all", "全部"], ["local", "本地文件"], ["chrome", "浏览器下载"], ["missing", "已丢失"]] as const)
+              .map(([key, label]) => <button key={key} type="button" aria-pressed={filter === key}
+                onClick={() => { setFilter(key); setSelected(null); }}>{label}</button>)}
           </div>
-          <div className="search"><span>⌕</span><input aria-label="搜索本地文件"
-            placeholder={textEnabled ? "搜索文件名、路径或正文…" : "搜索文件名、路径…"}
-            value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-          {textEnabled !== undefined && <label className="text-search-setting">
-            <input type="checkbox" checked={textEnabled} disabled={changingText || busy}
-              onChange={(event) => void changeText(event.target.checked)} />
-            <span>搜索文件正文 <small>索引授权目录中不超过 128 KiB 的 UTF-8 TXT、Markdown。丢失文件仍可按正文搜索，关闭时清除本机正文索引。</small></span>
-          </label>}
-          {error && <div className="alert error" role="alert">{error}</div>}
-          {clearingFolder && <div className="clear-history" role="dialog" aria-label="清除目录历史">
-            <p>清除 {clearingFolder} 及其子目录的全部 FileRecall 历史，并停止这些目录的索引。磁盘文件保留。</p>
+          {error && <p className="error" role="alert">{error}</p>}
+          {browser?.error && filter !== "local" && <p className="error" role="alert">{browser.error}</p>}
+          {!hasResults && loading && <p className="empty" role="status">正在搜索…</p>}
+          {!hasResults && !loading && <p className="empty">{query.trim() || filter !== "all" ? "没有找到匹配的记录。" :
+            <>暂无文件记录。<button className="secondary" onClick={() => setView("folders")}>管理授权目录</button></>}</p>}
+          {renderRecords(localRecords, "本地文件")}
+          {renderRecords(chromeRecords, "Chrome 下载")}
+        </section>
+        {selectedRecord && <FileDetails record={selectedRecord} onClose={closeDetails} reveal={reveal} openSource={openSource} />}
+      </div> : <section className="folders-view" aria-labelledby="folder-heading">
+        <div className="heading-row"><h1 id="folder-heading">授权目录</h1>
+          <div className="actions">
+            <button className="secondary" disabled={busy || !folders.length} onClick={() => perform(() => window.fileRecall.rescan())}>重新扫描</button>
+            <button disabled={busy} onClick={() => perform(() => window.fileRecall.addFolder())}>添加文件夹</button>
+          </div>
+        </div>
+        {textEnabled !== undefined && <label className="text-search-setting">
+          <input type="checkbox" checked={textEnabled} disabled={changingText || busy}
+            onChange={(event) => void changeText(event.target.checked)} />
+          <span>搜索文件正文<small>仅索引不超过 128 KiB 的 UTF-8 TXT 和 Markdown。关闭时清除本机正文索引。</small></span>
+        </label>}
+        {error && <p className="error" role="alert">{error}</p>}
+        {busy && <p role="status" className="muted">正在处理索引…</p>}
+        {notice && !busy && <p role="status" className="muted">{notice}</p>}
+        {clearingFolder && <div className="clear-history" role="alertdialog" aria-label="清除目录历史">
+          <p>清除 {clearingFolder} 及其子目录的全部 FileRecall 历史，并停止这些目录的索引。磁盘文件保留。</p>
+          <div className="actions">
             <button disabled={busy} onClick={clearHistory}>确认清除历史</button>
             <button className="secondary" disabled={busy} onClick={() => setClearingFolder(null)}>取消</button>
-          </div>}
-          {busy ? <div className="alert">正在扫描文件夹，请保持应用开启…</div> : <div className="alert">{notice}</div>}
-          <div className="summary"><div><strong>{files.length}</strong><span>条结果（最多显示 500 条）</span></div><div><strong>{missingCount}</strong><span>个已丢失文件（当前结果中）</span></div></div>
-          <div className="result-header"><span>文件</span><span>大小</span><span>状态</span><span>操作</span></div>
-          {files.length === 0 ? <div className="empty">{folders.length === 0 ? "添加一个文件夹，开始建立你的本地文件记忆。" : "没有找到匹配的文件。"}</div> :
-            files.map((file) => <div className="result-row" key={file.path}>
-              <div className="file-info"><span className="file-icon">▤</span><div>
-                <strong title={file.path}>{file.name}</strong><small title={file.path}>{file.path}</small>
-                {file.textMatched === 1 && <small>正文匹配</small>}
-                {file.currentPath && <small title={file.currentPath}>现址 {file.currentPath}</small>}
-                {!file.currentPath && file.possiblePath && <small title={file.possiblePath}>未确认候选 {file.possiblePath}</small>}
-              </div></div>
-              <span className="size">{formatSize(file.size)}</span>
-              <span className={file.status === "present" || file.currentPath ? "pill present" : "pill missing"}>
-                {file.currentPath ? "路径已变更" : file.status === "present" ? "存在" : "已丢失"}
-              </span>
-              <button className="link-button" disabled={file.status === "missing" && !file.currentPath} onClick={() => reveal(file.path)}>
-                {file.currentPath ? "定位现址" : "在文件夹中显示"}
-              </button>
-            </div>)}
-          <p className="footer-note">文件变化自动更新，应用启动时补扫，每 30 秒校验并恢复目录监控。丢失记录保留至手动清除。</p>
+          </div>
         </div>}
-      </main>
-    </div>
-  );
+        {!folders.length && <p className="empty">尚未选择扫描目录。</p>}
+        {folders.map((folder) => <div className="folder-row" key={folder.path}>
+          <div><strong>{folder.path}</strong>
+            <p className="muted">{{ waiting: "等待扫描", scanning: "正在更新索引", watching: "自动监控中", retrying: "等待自动重试" }[folder.state]}</p>
+            {folder.error && <p className="error">{folder.error}</p>}
+          </div>
+          <div className="actions">
+            <button className="secondary" disabled={busy} onClick={() => removeFolder(folder.path)} aria-label={`停止索引 ${folder.path}`}>停止索引</button>
+            <button className="secondary" disabled={busy} onClick={() => setClearingFolder(folder.path)} aria-label={`停止并清除历史 ${folder.path}`}>停止并清除历史</button>
+          </div>
+        </div>)}
+        {pastFolders.length > 0 && <h2>已停止索引的历史</h2>}
+        {pastFolders.map((history) => <div className="folder-row" key={history.path}>
+          <strong>{history.path}</strong>
+          <button className="secondary" disabled={busy} onClick={() => setClearingFolder(history.path)} aria-label={`清除历史 ${history.path}`}>清除历史（{history.count} 条）</button>
+        </div>)}
+      </section>}
+    </main>
+  </div>;
 }

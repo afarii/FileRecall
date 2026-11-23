@@ -5,6 +5,9 @@ on:
       - "desktop/**"
       - "desktop-sync*.mjs"
       - "history.html"
+      - "history.css"
+      - "ui-theme.css"
+      - "filerecall.svg"
       - "manifest.json"
       - ".github/workflows/desktop.yml"
   push:
@@ -14,6 +17,9 @@ on:
       - "desktop/**"
       - "desktop-sync*.mjs"
       - "history.html"
+      - "history.css"
+      - "ui-theme.css"
+      - "filerecall.svg"
       - "manifest.json"
       - ".github/workflows/desktop.yml"
 

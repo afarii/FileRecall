@@ -58,5 +58,5 @@ git diff --check
 The v0.4 development branch supports optional [Windows desktop sync](desktop/README.md#在-windows-同步-chrome-下载) from the FileRecall history page.
 
 The unpacked extension needs `manifest.json`, `background.js`, `content.js`, `context-matcher.mjs`, `download-record-store.mjs`,
-`history.html`, `history.css`, `history.js`, `history-view.mjs`, `history-file-actions.mjs`, `history-import.mjs` and `desktop-sync.mjs` at the package root.
+`history.html`, `history.css`, `ui-theme.css`, `filerecall.svg`, `history.js`, `history-view.mjs`, `history-file-actions.mjs`, `history-import.mjs` and `desktop-sync.mjs` at the package root.
 Include this README and LICENSE. Exclude `*.test.mjs`, `.git/`, `.gitignore`, development files and previous ZIP archives.

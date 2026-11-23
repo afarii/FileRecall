@@ -46,7 +46,7 @@ function tile(record) {
   const node = element("span", "file-tile");
   node.setAttribute("aria-hidden", "true");
   const extension = fileName(record).split(".").at(-1).toUpperCase();
-  node.dataset.extension = ["PDF", "ZIP", "GZ", "7Z", "EXE", "DMG", "MSI"].includes(extension) ? extension : "";
+  node.dataset.extension = ["PDF", "XLSX", "ZIP", "GZ", "7Z", "EXE", "DMG", "MSI"].includes(extension) ? extension : "";
   node.append(icon("file"));
   return node;
 }
