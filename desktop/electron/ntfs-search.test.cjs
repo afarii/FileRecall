@@ -84,7 +84,6 @@ test("cached NTFS names remain searchable before UAC reconnect, while live file 
   const { tmpdir } = require("node:os");
   const { join } = require("node:path");
   const home = await mkdtemp(join(tmpdir(), "filerecall-ntfs-cache-test-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
   const database = join(home, "ntfs.sqlite");
   const reader = {
     closed: false,
@@ -109,7 +108,7 @@ test("cached NTFS names remain searchable before UAC reconnect, while live file 
   const offline = new NtfsSearch(database, "D:\\AppData", "", {
     ...options, createReader: async () => { throw new Error("should not launch UAC for cached search"); },
   });
-  t.after(() => offline.close());
+  t.after(async () => { await offline.close(); await rm(home, { recursive: true, force: true }); });
   assert.equal(offline.status().connected, false);
   const [result] = offline.search("report");
   assert.equal(result.cached, true);
