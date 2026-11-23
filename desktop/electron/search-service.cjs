@@ -52,7 +52,10 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData }) {
     searchLocal: (query) => request("local", query),
     searchNtfs: (query, drives) => request("ntfs", query, drives),
     async close() {
-      if (!stopped) fail(new Error("搜索服务正在关闭"));
+      if (!stopped) {
+        try { await request("shutdown", ""); } catch { /* Worker may already have exited. */ }
+        fail(new Error("搜索服务正在关闭"));
+      }
       await worker.terminate();
     },
   };
