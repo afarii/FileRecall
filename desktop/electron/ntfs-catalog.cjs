@@ -50,6 +50,7 @@ class NtfsCatalog {
     const driveColumns = new Set(this.db.prepare("PRAGMA table_info(ntfs_drive)").all().map((entry) => entry.name));
     if (!driveColumns.has("build_position")) this.db.exec("ALTER TABLE ntfs_drive ADD COLUMN build_position TEXT");
     if (!driveColumns.has("build_journal")) this.db.exec("ALTER TABLE ntfs_drive ADD COLUMN build_journal TEXT");
+    if (!driveColumns.has("build_usn")) this.db.exec("ALTER TABLE ntfs_drive ADD COLUMN build_usn TEXT");
   }
 
   transaction(action) {
@@ -88,12 +89,12 @@ class NtfsCatalog {
     });
   }
 
-  beginBuild(drive, journal) {
+  beginBuild(drive, journal, startUsn) {
     const state = this.db.prepare("SELECT build_position, build_journal FROM ntfs_drive WHERE drive = ?").get(drive);
     if (state?.build_journal === journal && state.build_position !== null) return state.build_position;
     this.transaction(() => {
-      this.db.prepare("UPDATE ntfs_drive SET cursor = NULL, journal = NULL, build_position = '0', build_journal = ? WHERE drive = ?")
-        .run(journal, drive);
+      this.db.prepare("UPDATE ntfs_drive SET cursor = NULL, journal = NULL, build_position = '0', build_journal = ?, build_usn = ? WHERE drive = ?")
+        .run(journal, startUsn ?? null, drive);
       this.discardRows(drive);
     });
     return "0";
@@ -138,7 +139,7 @@ class NtfsCatalog {
   checkpoint(drive, journal, cursor) {
     this.db.prepare(`
       UPDATE ntfs_drive
-      SET journal = ?, cursor = ?, build_position = NULL, build_journal = NULL
+      SET journal = ?, cursor = ?, build_position = NULL, build_journal = NULL, build_usn = NULL
       WHERE drive = ?
     `).run(journal, cursor, drive);
   }
