@@ -4,6 +4,8 @@ Every download remembers where it came from.
 
 FileRecall is a local-first browser extension that records the source, context, and history of downloaded files.
 
+[v0.4 中文使用手册](desktop/USER-GUIDE.md) covers Windows, local AI search, Chrome, and Motrix／aria2.
+
 ## v0.3.0
 
 - Import Chrome's existing download history on demand, up to 100 records per click. Continue with the next batch;
@@ -55,7 +57,7 @@ git diff --check
 
 ## Release package
 
-The v0.4 development branch supports optional [Windows desktop sync](desktop/README.md#在-windows-同步-chrome-下载) from the FileRecall history page.
+The v0.4 development branch supports optional [Windows desktop sync](desktop/USER-GUIDE.md#3-同步下载记录) from the FileRecall history page.
 
 The unpacked extension needs `manifest.json`, `background.js`, `content.js`, `context-matcher.mjs`, `download-record-store.mjs`,
 `history.html`, `history.css`, `ui-theme.css`, `filerecall.svg`, `history.js`, `history-view.mjs`, `history-file-actions.mjs`, `history-import.mjs` and `desktop-sync.mjs` at the package root.
