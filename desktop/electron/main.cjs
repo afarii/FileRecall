@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, net, shell } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, net, safeStorage, shell } = require("electron");
 const { existsSync } = require("node:fs");
 const { lstat } = require("node:fs/promises");
 const { join } = require("node:path");
@@ -12,12 +12,14 @@ const { createHotkey } = require("./hotkey.cjs");
 const { semanticModel } = require("./semantic-model.cjs");
 const { createSemanticSearch } = require("./semantic-search.cjs");
 const { createProvenance } = require("./provenance.cjs");
+const { createAria2Connection } = require("./aria2-connection.cjs");
 
 let window;
 let index;
 let monitor;
 let hotkey;
 let semantic;
+let aria2;
 let closing = false;
 let quitReady = false;
 
@@ -102,6 +104,16 @@ app.whenReady().then(() => {
     return { files, indexed, truncated };
   });
   const downloadsPath = join(userData, "browser-downloads.sqlite");
+  aria2 = createAria2Connection(userData, safeStorage, (records) => {
+    if (!records.length) return 0;
+    const sources = new DownloadSources(downloadsPath);
+    try { return sources.importAria2(records); }
+    finally { sources.close(); }
+  }, () => send("downloads:changed"));
+  ipcMain.handle("aria2:status", () => aria2.status());
+  ipcMain.handle("aria2:connect", (_event, port, secret) => aria2.connect(port, secret));
+  ipcMain.handle("aria2:refresh", () => aria2.refresh());
+  ipcMain.handle("aria2:disconnect", () => aria2.disconnect());
   const connection = app.isPackaged && process.platform === "win32"
     ? chromeConnection(app.getPath("userData"), process.resourcesPath)
     : null;
@@ -132,8 +144,8 @@ app.whenReady().then(() => {
     notifyChanged();
     return result;
   }));
-  ipcMain.handle("downloads:search", async (_event, query) => {
-    const rows = readDownloads((sources) => sources.search(query), []);
+  ipcMain.handle("downloads:search", async (_event, query, manager) => {
+    const rows = readDownloads((sources) => sources.search(query, manager), []);
     return Promise.all(rows.map(async (row) => ({ ...row, pathStatus: await downloadPathStatus(row.path) })));
   });
   ipcMain.handle("downloads:open-source", async (_event, id) => {
@@ -220,7 +232,7 @@ app.whenReady().then(() => {
   ipcMain.handle("files:copy-path", async (_event, kind, key) => {
     if (typeof key !== "string") return false;
     const path = kind === "local" ? (await fileTarget(key) ?? index.get(key)?.path)
-      : kind === "chrome" && key.length <= 160 ? readDownloads((sources) => sources.byId(key)?.path, null) : null;
+      : kind === "download" && key.length <= 160 ? readDownloads((sources) => sources.byId(key)?.path, null) : null;
     if (!path) return false;
     clipboard.writeText(path);
     return true;
@@ -243,6 +255,7 @@ app.on("window-all-closed", () => {
 app.on("before-quit", (event) => {
   hotkey?.close();
   semantic?.clear();
+  aria2?.close();
   if (monitor && !quitReady) {
     event.preventDefault();
     if (closing) return;

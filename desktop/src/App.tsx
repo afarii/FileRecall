@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ChromeConnection from "./ChromeConnection";
+import Aria2Connection from "./Aria2Connection";
 import HotkeySettings from "./HotkeySettings";
 import useSemanticSearch from "./useSemanticSearch";
 import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } from "./FileDetails";
@@ -11,9 +12,11 @@ export default function App() {
   const [historyFolders, setHistoryFolders] = useState<Array<{ path: string; count: number }>>([]);
   const [clearingFolder, setClearingFolder] = useState<string | null>(null);
   const [localResult, setLocalResult] = useState<{ query: string; files: FileRecord[] }>();
-  const [browserResult, setBrowserResult] = useState<{ query: string; files: BrowserDownload[]; error?: string }>();
+  const [browserResult, setBrowserResult] = useState<{
+    query: string; files: BrowserDownload[]; manager?: BrowserDownload["manager"]; error?: string;
+  }>();
   const [downloadRefresh, setDownloadRefresh] = useState(0);
-  const [filter, setFilter] = useState<"all" | "local" | "chrome" | "missing" | "favorites" | "trusted" | "candidate">("all");
+  const [filter, setFilter] = useState<"all" | "local" | "chrome" | "aria2" | "missing" | "favorites" | "trusted" | "candidate">("all");
   const [selected, setSelected] = useState<string | null>(null);
   const selectedButton = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
@@ -61,23 +64,27 @@ export default function App() {
   }), []);
 
   const refreshDownloads = useCallback(() => setDownloadRefresh((value) => value + 1), []);
+  const downloadManager = filter === "aria2" ? "aria2"
+    : filter === "chrome" || filter === "trusted" || filter === "candidate" ? "chrome" : undefined;
 
   useEffect(() => {
     window.addEventListener("focus", refreshDownloads);
     return () => window.removeEventListener("focus", refreshDownloads);
   }, [refreshDownloads]);
 
+  useEffect(() => window.fileRecall.onDownloadsChanged(refreshDownloads), [refreshDownloads]);
+
   useEffect(() => {
     let active = true;
     const timer = window.setTimeout(() => {
-      window.fileRecall.downloads(query).then((files) => {
-        if (active) setBrowserResult({ query, files });
+      window.fileRecall.downloads(query, downloadManager).then((files) => {
+        if (active) setBrowserResult({ query, files, manager: downloadManager });
       }).catch(() => {
-        if (active) setBrowserResult({ query, files: [], error: "读取 Chrome 下载记录失败，可在 Chrome 设置中重试。" });
+        if (active) setBrowserResult({ query, files: [], manager: downloadManager, error: "读取下载记录失败，请重试。" });
       });
     }, query ? 150 : 0);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [query, downloadRefresh]);
+  }, [query, downloadRefresh, downloadManager]);
 
   const closeDetails = useCallback(() => {
     setSelected(null);
@@ -193,23 +200,23 @@ export default function App() {
 
 
   const local = localResult?.query === query ? localResult : undefined;
-  const browser = browserResult?.query === query ? browserResult : undefined;
+  const browser = browserResult?.query === query && browserResult.manager === downloadManager ? browserResult : undefined;
   const semanticMode = mode === "semantic";
   const semanticResult = semantic.result?.query === query ? semantic.result.result : undefined;
-  const downloadsOnly = filter === "chrome" || filter === "trusted" || filter === "candidate";
+  const downloadsOnly = filter === "chrome" || filter === "aria2" || filter === "trusted" || filter === "candidate";
   const localOnly = filter === "local" || filter === "favorites";
   const localFiles = semanticMode ? (semanticResult?.files ?? []) : (downloadsOnly ? [] : (local?.files ?? []));
   const localRecords: SearchRecord[] = localFiles
     .filter((file) => semanticMode || filter !== "missing" || (file.status === "missing" && !file.currentPath))
     .filter((file) => semanticMode || filter !== "favorites" || file.favorite === 1)
     .map((file) => ({ type: "local", file }));
-  const chromeRecords: SearchRecord[] = (semanticMode || localOnly ? [] : (browser?.files ?? []))
+  const downloadRecords = (semanticMode || localOnly ? [] : (browser?.files ?? []))
     .filter((file) => filter !== "missing" || file.pathStatus === "missing")
-    .filter((file) => filter !== "trusted" || file.canOpenSource)
+    .filter((file) => filter !== "trusted" || (file.manager === "chrome" && file.canOpenSource))
     .filter((file) => filter !== "candidate" || file.sourceStatus === "candidate")
-    .map((file) => ({ type: "chrome", file }));
-  const selectedRecord = [...localRecords, ...chromeRecords].find((record) => recordKey(record) === selected);
-  const hasResults = localRecords.length + chromeRecords.length > 0;
+    .map((file): SearchRecord => ({ type: "download", file }));
+  const selectedRecord = [...localRecords, ...downloadRecords].find((record) => recordKey(record) === selected);
+  const hasResults = localRecords.length + downloadRecords.length > 0;
   const loading = (!error && !downloadsOnly && !local) || (!localOnly && !browser);
   const pastFolders = historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path));
 
@@ -224,7 +231,7 @@ export default function App() {
         const subtitle = record.type === "local" ? (record.file.currentPath || file.path)
           : (record.file.domain || file.path);
         const needle = query.trim().toLowerCase();
-        const sourceMatched = record.type === "chrome" && needle.length > 0
+        const sourceMatched = record.type === "download" && needle.length > 0
           && [record.file.domain, record.file.sourceTitle].some((value) => value.toLowerCase().includes(needle));
         return <button type="button" className="result-row" key={key} aria-expanded={selected === key}
           aria-controls={selected === key ? "file-details" : undefined}
@@ -246,7 +253,7 @@ export default function App() {
             {record.type === "local" && (semanticMode || record.file.textMatched === 1) &&
               <small>{semanticMode ? "语义匹配" : "正文匹配"}</small>}
             {record.type === "local" && !semanticMode && record.file.annotationMatched === 1 && <small>备注或标签匹配</small>}
-            {sourceMatched && <small>来源匹配</small>}
+            {sourceMatched && <small>{record.type === "download" && record.file.manager === "aria2" ? "下载地址匹配" : "来源匹配"}</small>}
           </span>
           <span className={`badge ${status.tone}`}>{record.type === "local" && record.file.favorite === 1 ? "★ " : ""}{status.label}</span>
         </button>;
@@ -265,6 +272,7 @@ export default function App() {
         <button aria-pressed={view === "folders"} onClick={() => { setSelected(null); setView("folders"); }}>授权目录</button>
         <HotkeySettings />
         <ChromeConnection refresh={refreshDownloads} />
+        <Aria2Connection />
       </nav>
       {view === "files" ? <div className={`search-layout ${selectedRecord ? "with-details" : ""}`}>
         <section ref={resultPane} className="search-content" aria-labelledby="search-heading">
@@ -310,7 +318,7 @@ export default function App() {
               ? "未找到足够相关的文件。" : "暂无可用正文，请确认授权目录已完成索引。"}</p>}
             {semanticResult?.truncated && <p className="muted">本次比较了最近索引的 500 份文件。</p>}
           </div> : <div className="filters" role="group" aria-label="筛选搜索结果">
-            {([["all", "全部"], ["local", "本地文件"], ["chrome", "浏览器下载"], ["missing", "已丢失"], ["favorites", "收藏"],
+            {([["all", "全部"], ["local", "本地文件"], ["chrome", "Chrome 下载"], ["aria2", "Motrix／aria2"], ["missing", "已丢失"], ["favorites", "收藏"],
               ["trusted", "可信网页来源"], ["candidate", "网页来源待核对"]] as const)
               .map(([key, label]) => <button key={key} type="button" aria-pressed={filter === key}
                 onClick={() => { setFilter(key); setSelected(null); }}>{label}</button>)}
@@ -321,7 +329,8 @@ export default function App() {
           {!semanticMode && !hasResults && !loading && <p className="empty">{query.trim() || filter !== "all" ? "没有找到匹配的记录。" :
             <>暂无文件记录。<button className="secondary" onClick={() => setView("folders")}>管理授权目录</button></>}</p>}
           {renderRecords(localRecords, semanticMode ? "相近内容" : "本地文件")}
-          {renderRecords(chromeRecords, "Chrome 下载")}
+          {renderRecords(downloadRecords.filter((record) => record.type === "download" && record.file.manager === "chrome"), "Chrome 下载")}
+          {renderRecords(downloadRecords.filter((record) => record.type === "download" && record.file.manager === "aria2"), "Motrix／aria2 下载")}
         </section>
         {selectedRecord && <FileDetails key={recordKey(selectedRecord)} record={selectedRecord}
           onClose={closeDetails} reveal={reveal} openSource={openSource} />}

@@ -3,14 +3,15 @@ import FileNotes from "./FileNotes";
 
 export type SearchRecord =
   | { type: "local"; file: FileRecord }
-  | { type: "chrome"; file: BrowserDownload };
+  | { type: "download"; file: BrowserDownload };
 
 export const recordKey = (record: SearchRecord) =>
-  record.type === "local" ? "local:" + record.file.path : "chrome:" + record.file.id;
+  record.type === "local" ? "local:" + record.file.path : "download:" + record.file.id;
 
 const sourceLabels = {
   matched: "来源已确认", confirmed: "人工确认", manual: "人工填写",
   candidate: "候选待确认", unknown: "来源未知", rejected: "候选已排除",
+  direct: "下载地址已记录",
 };
 
 export function recordStatus(record: SearchRecord) {
@@ -49,7 +50,7 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
   const { file } = record;
   const status = recordStatus(record);
   const localFile = record.type === "local" ? record.file : null;
-  const browserId = record.type === "chrome" ? record.file.id : null;
+  const browserId = record.type === "download" ? record.file.id : null;
   const [provenance, setProvenance] = useState<FileProvenance>();
   const [linked, setLinked] = useState<Pick<FileRecord, "path" | "name" | "status"> | null>(null);
   const [deciding, setDeciding] = useState(false);
@@ -139,17 +140,20 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
           <span className="badge good">文件关联已确认</span>
           <dl>
             <dt>原下载路径</dt><dd>{confirmed.path}</dd>
-            <dt>网页来源</dt><dd>{[confirmed.domain, confirmed.sourceTitle].filter(Boolean).join(" · ") || sourceLabels[confirmed.sourceStatus]}</dd>
+            <dt>{confirmed.manager === "aria2" ? "下载地址" : "网页来源"}</dt>
+            <dd>{[confirmed.domain, confirmed.sourceTitle].filter(Boolean).join(" · ") || sourceLabels[confirmed.sourceStatus]}</dd>
           </dl>
           <div className="actions">
-            {confirmed.canOpenSource && <button onClick={() => void openLinkedSource(confirmed.id)}>打开来源页面 ↗</button>}
+            {confirmed.canOpenSource && <button onClick={() => void openLinkedSource(confirmed.id)}>
+              {confirmed.manager === "aria2" ? "打开下载地址" : "打开来源页面"} ↗</button>}
             <button className="secondary" disabled={deciding} onClick={() => void decideSource(confirmed.id, "undo")}>撤销关联</button>
           </div>
         </> : <p className="muted">{provenance ? "来源未知" : "正在读取来历…"}</p>}
         {!confirmed && provenance?.candidates.map((candidate) => <div className="source-candidate" key={candidate.id}>
           <strong>{candidate.name}</strong> <span className="badge warn">{candidate.evidence} · 待核对</span>
           <p>{candidate.path}</p>
-          <p className="muted">{[candidate.domain, candidate.sourceTitle, new Date(candidate.startedAt).toLocaleString()].filter(Boolean).join(" · ")}</p>
+          <p className="muted">{[candidate.manager === "aria2" ? "Motrix／aria2" : "Chrome", candidate.domain, candidate.sourceTitle,
+            new Date(candidate.startedAt).toLocaleString()].filter(Boolean).join(" · ")}</p>
           <div className="actions">
             <button disabled={deciding} onClick={() => void decideSource(candidate.id, "confirmed")}>确认是同一文件</button>
             <button className="secondary" disabled={deciding} onClick={() => void decideSource(candidate.id, "rejected")}>排除</button>
@@ -167,7 +171,7 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
         <h3>下载记录</h3><dl>
           <dt>原路径</dt><dd>{file.path}</dd>
           <dt>原路径状态</dt><dd>{{ present: "原路径有文件", missing: "原路径已丢失", unknown: "原路径状态未知" }[record.file.pathStatus]}</dd>
-          <dt>下载时间</dt><dd>{new Date(record.file.startedAt).toLocaleString()}</dd>
+          <dt>{record.file.manager === "aria2" ? "首次导入" : "下载时间"}</dt><dd>{new Date(record.file.startedAt).toLocaleString()}</dd>
           {linked && <><dt>{linked.status === "present" ? "当前位置" : "关联的历史路径"}</dt><dd>{linked.path}</dd></>}
         </dl>
         <div className="actions">
@@ -176,9 +180,11 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
         </div>
       </section>
       <section className="detail-section">
-        <h3>文件来源</h3>
+        <h3>{record.file.manager === "aria2" ? "下载地址" : "文件来源"}</h3>
         <p>{[record.file.domain, record.file.sourceTitle].filter(Boolean).join(" · ") || status.label}</p>
-        {record.file.canOpenSource && <button onClick={() => openSource(record.file.id)}>打开来源页面 ↗</button>}
+        {record.file.manager === "aria2" && <p className="muted">下载器只提供任务地址，来源网页未知。</p>}
+        {record.file.canOpenSource && <button onClick={() => openSource(record.file.id)}>
+          {record.file.manager === "aria2" ? "打开下载地址" : "打开来源页面"} ↗</button>}
         {record.file.sourceStatus === "candidate" && <p className="muted">可在 Chrome 扩展中核对来源。</p>}
       </section>
     </>}

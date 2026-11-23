@@ -15,7 +15,7 @@ button.secondary:hover { background: var(--fr-hover); }
 .brand { display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 740; letter-spacing: -.03em; }
 .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; background: var(--fr-accent); border-radius: 8px; }
 .brand-mark img { width: 23px; height: 23px; }
-.app-nav { display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 10px 24px; }
+.app-nav { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 9px; padding: 10px 24px; }
 .app-nav > button, .chrome-connection summary, .filters button { border: 0; background: transparent; color: var(--fr-muted); padding: 7px 9px; font-size: 13px; }
 .app-nav > button[aria-pressed="true"], .filters button[aria-pressed="true"], .filters button:hover { background: var(--fr-hover); color: var(--fr-accent); }
 .chrome-connection { position: relative; }
@@ -24,6 +24,7 @@ button.secondary:hover { background: var(--fr-hover); }
 .connection-panel { position: absolute; right: 0; top: 40px; z-index: 2; width: min(340px, 88vw); padding: 14px; background: var(--fr-paper); border: 1px solid var(--fr-line); border-radius: 9px; box-shadow: 0 8px 26px #34281d15; }
 .connection-panel p { margin: 0 0 10px; color: var(--fr-muted); line-height: 1.55; }
 .connection-panel form { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.connection-panel label { width: 100%; }
 .connection-panel input { width: 100%; padding: 7px; border: 1px solid var(--fr-line); border-radius: 6px; background: white; }
 
 .search-layout { width: min(100%, 1280px); margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); }

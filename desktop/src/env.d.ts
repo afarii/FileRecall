@@ -27,7 +27,8 @@ interface BrowserDownload {
   path: string;
   name: string;
   startedAt: number;
-  sourceStatus: "matched" | "confirmed" | "manual" | "candidate" | "unknown" | "rejected";
+  sourceStatus: "matched" | "confirmed" | "manual" | "candidate" | "unknown" | "rejected" | "direct";
+  manager: "chrome" | "aria2";
   sourceTitle: string;
   domain: string;
   canOpenSource: boolean;
@@ -73,6 +74,17 @@ interface SemanticResult {
   truncated: boolean;
 }
 
+interface Aria2Status {
+  connected: boolean;
+  port: number;
+  hasSecret: boolean;
+}
+
+interface Aria2Sync {
+  found: number;
+  changed: number;
+}
+
 interface Window {
   fileRecall: {
     folders(): Promise<IndexedFolder[]>;
@@ -85,7 +97,12 @@ interface Window {
     search(query: string): Promise<FileRecord[]>;
     textEnabled(): Promise<boolean>;
     setTextEnabled(enabled: boolean): Promise<void>;
-    downloads(query: string): Promise<BrowserDownload[]>;
+    downloads(query: string, manager?: BrowserDownload["manager"]): Promise<BrowserDownload[]>;
+    aria2Status(): Promise<Aria2Status>;
+    connectAria2(port: number, secret: string): Promise<Aria2Sync>;
+    refreshAria2(): Promise<Aria2Sync>;
+    disconnectAria2(): Promise<void>;
+    onDownloadsChanged(callback: () => void): () => void;
     chromeStatus(): Promise<{ available: boolean; extensionId: string | null }>;
     connectChrome(extensionId: string): Promise<string | null>;
     openSource(id: string): Promise<boolean>;
@@ -95,7 +112,7 @@ interface Window {
     linkedFile(id: string): Promise<Pick<FileRecord, "path" | "name" | "status"> | null>;
     annotate(path: string, identity: string, input: FileAnnotation): Promise<FileAnnotation>;
     openFile(path: string): Promise<{ ok: boolean; message?: string }>;
-    copyPath(kind: "local" | "chrome", key: string): Promise<boolean>;
+    copyPath(kind: "local" | "download", key: string): Promise<boolean>;
     reveal(path: string): Promise<{ ok: boolean; message?: string }>;
     hotkey(): Promise<{ shortcut: string; registered: boolean }>;
     setHotkey(value: string): Promise<{ ok: true; shortcut: string } | { ok: false; message: string }>;
