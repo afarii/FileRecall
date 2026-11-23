@@ -27,8 +27,8 @@ function relevance(record: UnifiedRecord, query: string) {
   if (record.type === "local") {
     const rank = (file as LocalRanking).matchRank ?? 5;
     score += [700, 280, 200, 310, 370, 80][rank] ?? 80;
-    if (file.favorite === 1) score += 80;
-    if (file.status === "missing" && !file.currentPath) score -= 130;
+    if (record.file.favorite === 1) score += 80;
+    if (record.file.status === "missing" && !record.file.currentPath) score -= 130;
   } else {
     score += name === needle ? 700 : name.startsWith(needle) ? 280 : 160;
   }
@@ -275,8 +275,8 @@ export default function App() {
     .filter((file) => filter !== "candidate" || file.sourceStatus === "candidate")
     .map((file): SearchRecord => ({ type: "download", file })), [browser, semanticMode, localOnly, filter]);
   const allRecords: UnifiedRecord[] = useMemo(() => {
-    const localPaths = new Set(localRecords.map(({ file }) =>
-      (file.type === "local" ? file.file.currentPath || file.file.path : "").toLowerCase()));
+    const localPaths = new Set(localRecords.filter((record) => record.type === "local")
+      .map((record) => (record.type === "local" ? record.file.currentPath || record.file.path : "").toLowerCase()));
     const diskRecords: UnifiedRecord[] = semanticMode || (filter !== "all" && filter !== "local") ||
       ntfsResult?.query !== searchQuery ? [] : ntfsResult.files
       .filter((file) => !localPaths.has(file.path.toLowerCase()))
