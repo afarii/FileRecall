@@ -267,7 +267,8 @@ app.whenReady().then(() => {
     return result;
   }));
   ipcMain.handle("downloads:search", async (_event, query, manager) => {
-    const rows = readDownloads((sources) => sources.search(query, manager), []);
+    // Live typing needs a small, cheap first page; each path status check is disk I/O.
+    const rows = readDownloads((sources) => sources.search(query, manager), []).slice(0, 80);
     return Promise.all(rows.map(async (row) => ({ ...row, pathStatus: await downloadPathStatus(row.path) })));
   });
   ipcMain.handle("downloads:open-source", async (_event, id) => {
