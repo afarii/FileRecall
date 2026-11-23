@@ -19,7 +19,7 @@ test("raw MFT snapshot resolves nested and hidden system files, with persisted c
   try {
     db = new NtfsCatalog(path, "C:\\Users\\Me\\AppData\\Roaming\\filerecall-desktop");
     db.enable("C", volume);
-    assert.equal(db.beginBuild("C", "201"), "0");
+    assert.equal(db.beginBuild("C", "201", "37"), "0");
     db.apply("C", [
       row(100, 5, "Windows", 16), row(101, 100, "System32", 16),
       row(102, 101, "config", 16), row(103, 102, "SAM", 0x2 | 0x4),
@@ -31,9 +31,14 @@ test("raw MFT snapshot resolves nested and hidden system files, with persisted c
       row(111, 110, "ntfs-index.sqlite"),
     ], true, undefined, "55");
     assert.equal(db.drives()[0].build_position, "55");
+    assert.equal(db.drives()[0].build_usn, "37", "preserve the pre-scan USN checkpoint");
+    assert.equal(db.search("C", "pagefile")[0]?.directory, "C:\\", "partial MFT is searchable immediately");
+    assert.equal(db.search("C", "sam")[0]?.directory, "C:\\Windows\\System32\\config",
+      "nested parent FRNs can be resolved before final materialization");
     db.close();
     db = new NtfsCatalog(path, "C:\\Users\\Me\\AppData\\Roaming\\filerecall-desktop");
-    assert.equal(db.beginBuild("C", "201"), "55", "resumes exact committed position");
+    assert.equal(db.beginBuild("C", "201", "999"), "55", "resumes exact committed position");
+    assert.equal(db.drives()[0].build_usn, "37", "USN base remains the snapshot-start cursor");
     assert.equal(db.db.prepare("SELECT COUNT(*) AS count FROM ntfs_item").get().count, 12);
     db.finishBuild("C");
     db.checkpoint("C", "201", "77");
