@@ -95,7 +95,7 @@ export default function NtfsPanel() {
       </form>
       {status.drives.map((item) => <div className="folder-row" key={item.drive}>
         <div><strong>{item.drive}:\</strong> <span className="muted" role="status">{phases[item.phase]}</span>
-          {item.message && <p className="error">{item.message}</p>}
+          {item.message && <p className={item.phase === "error" ? "error" : "muted"}>{item.message}</p>}
         </div>
         <button type="button" className="secondary" disabled={busy}
           onClick={() => void manage(() => api.disableNtfs(item.drive))}>停止整盘索引</button>
