@@ -18,6 +18,7 @@ const { createAria2Connection } = require("./aria2-connection.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { createNtfsService } = require("./ntfs-service.cjs");
 const { createSearchService } = require("./search-service.cjs");
+const { createPerformanceDiagnostics } = require("./performance-diagnostics.cjs");
 const { readMotw } = require("./motw.cjs");
 const appIconDataURL = require("./app-icon.cjs");
 const appIcon = () => nativeImage?.createFromDataURL(appIconDataURL);
@@ -31,6 +32,7 @@ let aria2;
 let updates;
 let ntfs;
 let searches;
+let diagnostics;
 let ntfsClosing;
 let searchKeyTimer;
 let updateNotification;
@@ -134,6 +136,19 @@ app.whenReady().then(() => {
   if (!ownsLock) return;
   const userData = app.getPath("userData");
   const databasePath = join(userData, "files.sqlite");
+  diagnostics = createPerformanceDiagnostics(userData);
+  ipcMain.handle("diagnostics:get", () => diagnostics.snapshot());
+  ipcMain.handle("diagnostics:copy", () => {
+    clipboard.writeText(JSON.stringify(diagnostics.snapshot(), null, 2));
+    return true;
+  });
+  ipcMain.handle("diagnostics:reveal", () => {
+    shell.showItemInFolder(diagnostics.file);
+    return true;
+  });
+  ipcMain.handle("diagnostics:renderer-lag", (_event, lag) => {
+    diagnostics.recordRendererLag(lag);
+  });
   index = new FileIndex(databasePath);
   monitor = new DirectoryMonitor(index, { onChange: notifyChanged });
   const modelPath = join(userData, "models", "multilingual-e5-small");
@@ -147,6 +162,7 @@ app.whenReady().then(() => {
           onChange: (state) => send("ntfs:changed", state),
           onPaths: (drive, paths) => monitor.applyJournal(drive, paths),
           onActiveDrives: (drives) => monitor.setJournalDrives(drives),
+          onMetrics: (metrics) => diagnostics.setNtfsMetrics(metrics),
         });
       } catch (error) {
         console.warn("NTFS index unavailable:", error.message);
@@ -414,7 +430,7 @@ app.on("before-quit", (event) => {
     event.preventDefault();
     if (closing) return;
     closing = true;
-    Promise.allSettled([monitor.close(), ntfsClosing, searches?.close()]).then(() => {
+    Promise.allSettled([monitor.close(), ntfsClosing, searches?.close(), diagnostics?.close()]).then(() => {
       index?.close();
       index = undefined;
       quitReady = true;
