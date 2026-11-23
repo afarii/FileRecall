@@ -16,7 +16,7 @@ const { createSemanticSearch } = require("./semantic-search.cjs");
 const { createProvenance } = require("./provenance.cjs");
 const { createAria2Connection } = require("./aria2-connection.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
-const { NtfsSearch } = require("./ntfs-search.cjs");
+const { createNtfsService } = require("./ntfs-service.cjs");
 const { createSearchService } = require("./search-service.cjs");
 const { readMotw } = require("./motw.cjs");
 const appIconDataURL = require("./app-icon.cjs");
@@ -143,7 +143,7 @@ app.whenReady().then(() => {
     const ntfsReader = join(process.resourcesPath, "native", "filerecall-ntfs.exe");
     if (existsSync(ntfsReader)) {
       try {
-        ntfs = new NtfsSearch(join(userData, "ntfs-index.sqlite"), userData, ntfsReader, {
+        ntfs = createNtfsService(join(userData, "ntfs-index.sqlite"), userData, ntfsReader, {
           onChange: (state) => send("ntfs:changed", state),
           onPaths: (drive, paths) => monitor.applyJournal(drive, paths),
           onActiveDrives: (drives) => monitor.setJournalDrives(drives),
@@ -167,16 +167,16 @@ app.whenReady().then(() => {
   ipcMain.handle("ntfs:search", (_event, query) => ntfs
     ? searches.searchNtfs(query, ntfs.searchableDrives()) : []);
   ipcMain.handle("ntfs:motw", async (_event, drive, id) => {
-    const path = ntfs?.target(drive, id);
+    const path = await ntfs?.target(drive, id);
     return path ? readMotw(path) : null;
   });
   ipcMain.handle("ntfs:reveal", async (_event, drive, id) => {
-    const path = ntfs?.target(drive, id);
+    const path = await ntfs?.target(drive, id);
     if (!path) return false;
     try {
-      if ((await lstat(path)).isSymbolicLink() || ntfs.target(drive, id) !== path) return false;
+      if ((await lstat(path)).isSymbolicLink() || await ntfs.target(drive, id) !== path) return false;
       shell.showItemInFolder(path);
-      ntfs.catalog.recordUse(drive, id);
+      void ntfs.recordUse(drive, id).catch(() => {});
       return true;
     } catch {
       return false;
