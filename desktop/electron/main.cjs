@@ -95,6 +95,11 @@ function createWindow() {
     minWidth: 760,
     minHeight: 520,
     title: "FileRecall",
+    backgroundColor: "#ffffff",
+    ...(process.platform === "win32" ? {
+      titleBarStyle: "hidden",
+      titleBarOverlay: { color: "#ffffff", symbolColor: "#526175", height: 52 },
+    } : {}),
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
