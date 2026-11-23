@@ -8,6 +8,10 @@ const subscribe = (channel, callback) => {
 };
 
 contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
+  performanceReport: () => ipcRenderer.invoke("diagnostics:get"),
+  copyPerformanceReport: () => ipcRenderer.invoke("diagnostics:copy"),
+  revealPerformanceLog: () => ipcRenderer.invoke("diagnostics:reveal"),
+  reportRendererLag: (ms) => ipcRenderer.invoke("diagnostics:renderer-lag", ms),
   folders: () => ipcRenderer.invoke("folders:list"),
   historyFolders: () => ipcRenderer.invoke("history:folders"),
   clearHistory: (path) => ipcRenderer.invoke("history:clear", path),
