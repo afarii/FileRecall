@@ -36,7 +36,7 @@ export default function NtfsQuickResults({ query, enabled, onResults }: {
       void window.fileRecall.searchNtfs(query).then((files) => {
         if (active) onResults({ query, files });
       }).catch(() => { if (active) onResults({ query, files: [] }); });
-    }, 70);
+    }, 0);
     return () => { active = false; window.clearTimeout(timer); };
   }, [query, enabled, revision, onResults]);
 
