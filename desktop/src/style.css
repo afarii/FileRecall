@@ -103,3 +103,125 @@ button.secondary:hover { background: var(--fr-hover); }
   .search-content, .folders-view { padding-inline: 14px; }
   .file-details { margin-inline: 14px; }
 }
+
+/* Search-first desktop presentation. Native caption controls remain at the top-right. */
+:root {
+  --fr-paper: #ffffff;
+  --fr-canvas: #f7f9fc;
+  --fr-ink: #1c2533;
+  --fr-muted: #667385;
+  --fr-line: #e5eaf0;
+  --fr-accent: #375bc5;
+  --fr-hover: #eef3fc;
+}
+body { background: var(--fr-paper); }
+.app-bar {
+  min-height: 52px;
+  padding: 0 168px 0 22px;
+  border-bottom: 1px solid var(--fr-line);
+  background: #fff;
+  -webkit-app-region: drag;
+}
+.app-actions { display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag; }
+.app-actions button {
+  background: transparent;
+  border: 0;
+  color: var(--fr-muted);
+  padding: 7px 12px;
+  font-weight: 600;
+}
+.app-actions button[aria-pressed="true"], .app-actions button:hover {
+  background: var(--fr-hover);
+  color: var(--fr-accent);
+}
+.brand { font-size: 15px; letter-spacing: -.02em; }
+.brand-mark { width: 29px; height: 29px; border-radius: 9px; }
+.brand-mark img { width: 23px; height: 23px; }
+.search-content { max-width: 840px; padding-top: 27px; }
+.search-content h1, .with-details .search-content h1 {
+  font-size: 27px;
+  line-height: 1.3;
+  text-align: left;
+  margin-bottom: 20px;
+  letter-spacing: -.035em;
+}
+.search-modes { margin-bottom: 11px; }
+.search-modes button { padding: 7px 12px; }
+.search-box {
+  height: 54px;
+  border-radius: 13px;
+  border-color: var(--fr-line);
+  box-shadow: 0 2px 10px #1b36530d;
+}
+.search-box:focus-within { box-shadow: 0 0 0 3px #dce6ff; }
+.filters { align-items: center; margin-top: 14px; margin-bottom: 21px; gap: 5px; }
+.filters button { border: 0; background: transparent; color: var(--fr-muted); padding: 7px 10px; }
+.filters button:hover, .filters button[aria-pressed="true"] { color: var(--fr-accent); background: var(--fr-hover); }
+.filter-more { position: relative; font-size: 12px; color: var(--fr-muted); }
+.filter-more summary {
+  cursor: pointer;
+  padding: 7px 10px;
+  border-radius: 8px;
+  list-style: none;
+}
+.filter-more summary::after { content: "⌄"; padding-left: 6px; }
+.filter-more[open] { display: flex; align-items: center; flex-wrap: wrap; }
+.filter-more button { white-space: nowrap; }
+.results-group { margin-bottom: 19px; }
+.results-group h2 { margin-bottom: 8px; color: var(--fr-muted); }
+.result-row {
+  min-height: 62px;
+  margin-bottom: 3px;
+  padding: 8px 11px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  gap: 12px;
+}
+.result-row:last-child { border-bottom: 1px solid transparent; }
+.result-row[aria-expanded="true"], .result-row:hover { border-color: var(--fr-line); }
+.result-copy strong { font-weight: 650; }
+.result-copy > span { font-size: 12px; }
+.file-tile {
+  width: 39px;
+  height: 39px;
+  background: #edf1f6;
+  color: #586b83;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  border-radius: 10px;
+}
+.file-tile[data-kind="pdf"] { background: #fbece8; color: #b44632; }
+.file-tile[data-kind="document"] { background: #e9efff; color: #345fc3; }
+.file-tile[data-kind="sheet"] { background: #e7f5ec; color: #21714b; }
+.file-tile[data-kind="slides"] { background: #fff0df; color: #aa632b; }
+.file-tile[data-kind="image"] { background: #f1eafd; color: #7550a4; }
+.file-tile[data-kind="archive"] { background: #edf0f4; color: #566579; }
+.file-tile[data-kind="system"] { background: #f3f3f4; color: #7f8790; }
+.show-more { margin-top: 9px; width: 100%; }
+.file-details { background: #fbfcff; border-color: var(--fr-line); }
+.settings-view { max-width: 730px; padding-top: 30px; }
+.settings-view h1 { font-size: 25px; margin-bottom: 7px; }
+.settings-links { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0 27px; }
+.settings-tools { border-top: 1px solid var(--fr-line); }
+.settings-tools .chrome-connection { position: static; border-bottom: 1px solid var(--fr-line); }
+.settings-tools .chrome-connection summary {
+  padding: 16px 6px;
+  font-size: 14px;
+  color: var(--fr-ink);
+  font-weight: 600;
+}
+.settings-tools .connection-panel {
+  position: static;
+  width: 100%;
+  border: 0;
+  box-shadow: none;
+  padding: 4px 6px 18px;
+}
+@media (max-width: 700px) {
+  .app-bar { padding-left: 12px; padding-right: 146px; }
+  .app-actions { gap: 0; }
+  .app-actions button { padding: 7px 8px; }
+  .search-content { padding-top: 18px; }
+}
