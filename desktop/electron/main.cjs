@@ -143,6 +143,7 @@ app.whenReady().then(() => {
   const ntfsStatus = () => ntfs?.status() ?? { available: false, connected: false, drives: [] };
   ipcMain.handle("ntfs:status", ntfsStatus);
   ipcMain.handle("ntfs:connect", () => ntfs?.reconnect() ?? ntfsStatus());
+  ipcMain.handle("ntfs:retry-auto", async () => { await ntfs?.retryAutomatically(); return ntfsStatus(); });
   ipcMain.handle("ntfs:enable", (_event, drive) => ntfs?.enable(drive) ?? ntfsStatus());
   ipcMain.handle("ntfs:disable", (_event, drive) => ntfs?.disable(drive) ?? ntfsStatus());
   ipcMain.handle("ntfs:search", (_event, query) => ntfs?.search(query) ?? []);

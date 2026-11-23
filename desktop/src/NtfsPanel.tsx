@@ -71,8 +71,13 @@ export default function NtfsPanel() {
     : new Set<string>();
   const visible = matches.filter((item) => ready.has(item.drive));
   return <section className="folders-view" aria-labelledby="ntfs-heading">
-    <div className="heading-row"><h1 id="ntfs-heading">NTFS 整盘搜索</h1></div>
-    <p className="muted">按文件名和路径查找选定本地磁盘中的文件。启用时，Windows 会要求授权只读索引助手。本次 FileRecall 退出后，助手也会关闭。</p>
+    <div className="heading-row"><h1 id="ntfs-heading">NTFS 磁盘索引管理</h1></div>
+    <p className="muted">首次启动自动检测固定 NTFS 磁盘并在后台建立文件名索引，Windows 可能要求授权只读助手；主搜索框可直接查询结果。正文索引仍按授权目录开启。</p>
+    {status?.autoPhase === "discovering" && <p role="status">正在检测本地固定 NTFS 磁盘…</p>}
+    {status?.autoPhase === "authorizing" && <p role="status">正在连接只读助手，可能需要 Windows 授权…</p>}
+    {status?.autoMessage && <p role="status" className="muted">{status.autoMessage}</p>}
+    {(status?.autoPhase === "permission-required" || status?.autoPhase === "error") &&
+      <button type="button" className="secondary" disabled={busy} onClick={() => void manage(api.retryAutoNtfs)}>重试自动索引</button>
     {!status?.available && <p role="status">{status ? "请使用 Windows 安装版启用整盘搜索。" : "正在读取状态…"}</p>}
     {status?.available && <>
       <form className="search-form" onSubmit={(event) => {
@@ -83,7 +88,7 @@ export default function NtfsPanel() {
           <input aria-label="磁盘盘符" placeholder="输入本地盘符，例如 D" value={drive} maxLength={1}
             onChange={(event) => setDrive(event.target.value)} />
         </label>
-        <button disabled={busy || !/^[a-z]$/i.test(drive.trim())}>添加磁盘</button>
+        <button disabled={busy || !/^[a-z]$/i.test(drive.trim())}>手动添加磁盘</button>
         {!status.connected && status.drives.length > 0 &&
           <button type="button" className="secondary" disabled={busy}
             onClick={() => void manage(api.connectNtfs)}>重新连接助手</button>}

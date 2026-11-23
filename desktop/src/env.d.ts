@@ -43,6 +43,12 @@ interface FileAnnotation {
   tags: string[];
 }
 
+interface MotwEvidence {
+  zoneId: number | null;
+  hostUrl: string | null;
+  referrerUrl: string | null;
+}
+
 interface FileProvenance {
   identity: string | null;
   confirmed: SourceRecord | null;
@@ -95,6 +101,8 @@ interface DesktopUpdateStatus {
 
 interface NtfsStatus {
   available: boolean;
+  autoPhase?: "idle" | "discovering" | "authorizing" | "ready" | "permission-required" | "error";
+  autoMessage?: string;
   connected: boolean;
   drives: Array<{ drive: string; phase: "disconnected" | "building" | "rebuild" | "catching-up" | "ready" | "error"; message?: string }>;
 }
@@ -149,6 +157,9 @@ interface Window {
     enableNtfs(drive: string): Promise<NtfsStatus>;
     disableNtfs(drive: string): Promise<NtfsStatus>;
     searchNtfs(query: string): Promise<NtfsResult[]>;
+    retryAutoNtfs(): Promise<NtfsStatus>;
+    ntfsMotw(drive: string, id: string): Promise<MotwEvidence | null>;
+    localMotw(path: string): Promise<MotwEvidence | null>;
     revealNtfs(drive: string, id: string): Promise<boolean>;
     onNtfsChanged(callback: (status: NtfsStatus) => void): () => void;
     semanticStatus(): Promise<ModelStatus>;

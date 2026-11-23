@@ -125,6 +125,12 @@ class NtfsSearch {
     return this.autoTask;
   }
 
+  retryAutomatically() {
+    if (!["error", "permission-required", "idle"].includes(this.autoPhase)) return this.autoTask ?? Promise.resolve();
+    this.autoTask = undefined;
+    return this.startAutomatically();
+  }
+
   enable(value) {
     const drive = driveLetter(value);
     return this.enqueue(async () => {

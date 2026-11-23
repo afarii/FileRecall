@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import FileNotes from "./FileNotes";
+import MotwInfo from "./MotwInfo";
 
 export type SearchRecord =
   | { type: "local"; file: FileRecord }
@@ -164,6 +165,7 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
           <button className="secondary" disabled={deciding} onClick={() => void decideSource(item.id, "undo")}>撤销排除</button>
         </div>)}
       </section>
+      <MotwInfo localPath={file.path} />
       {provenance?.identity && provenance.annotation &&
         <FileNotes key={provenance.identity} path={file.path} identity={provenance.identity} initial={provenance.annotation} />}
     </> : <>

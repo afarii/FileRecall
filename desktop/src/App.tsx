@@ -4,6 +4,7 @@ import Aria2Connection from "./Aria2Connection";
 import HotkeySettings from "./HotkeySettings";
 import DesktopUpdates from "./DesktopUpdates";
 import NtfsPanel from "./NtfsPanel";
+import NtfsQuickResults from "./NtfsQuickResults";
 import useSemanticSearch from "./useSemanticSearch";
 import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } from "./FileDetails";
 import logo from "../../filerecall.svg";
@@ -20,6 +21,7 @@ export default function App() {
   const [downloadRefresh, setDownloadRefresh] = useState(0);
   const [filter, setFilter] = useState<"all" | "local" | "chrome" | "aria2" | "missing" | "favorites" | "trusted" | "candidate">("all");
   const [selected, setSelected] = useState<string | null>(null);
+  const [ntfsCount, setNtfsCount] = useState(0);
   const selectedButton = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<"literal" | "semantic">("literal");
@@ -218,7 +220,7 @@ export default function App() {
     .filter((file) => filter !== "candidate" || file.sourceStatus === "candidate")
     .map((file): SearchRecord => ({ type: "download", file }));
   const selectedRecord = [...localRecords, ...downloadRecords].find((record) => recordKey(record) === selected);
-  const hasResults = localRecords.length + downloadRecords.length > 0;
+  const hasResults = localRecords.length + downloadRecords.length + ntfsCount > 0;
   const loading = (!error && !downloadsOnly && !local) || (!localOnly && !browser);
   const pastFolders = historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path));
 
@@ -272,7 +274,7 @@ export default function App() {
       <nav className="app-nav" aria-label="主要功能">
         <button aria-pressed={view === "files"} onClick={() => setView("files")}>搜索文件</button>
         <button aria-pressed={view === "folders"} onClick={() => { setSelected(null); setView("folders"); }}>授权目录</button>
-        <button aria-pressed={view === "ntfs"} onClick={() => { setSelected(null); setView("ntfs"); }}>整盘搜索</button>
+        <button aria-pressed={view === "ntfs"} onClick={() => { setSelected(null); setView("ntfs"); }}>磁盘索引</button>
         <HotkeySettings />
         <ChromeConnection refresh={refreshDownloads} />
         <Aria2Connection />
@@ -333,6 +335,9 @@ export default function App() {
           {!semanticMode && !hasResults && !loading && <p className="empty">{query.trim() || filter !== "all" ? "没有找到匹配的记录。" :
             <>暂无文件记录。<button className="secondary" onClick={() => setView("folders")}>管理授权目录</button></>}</p>}
           {renderRecords(localRecords, semanticMode ? "相近内容" : "本地文件")}
+           <NtfsQuickResults query={query} enabled={!semanticMode && (filter === "all" || filter === "local")}
+             existingPaths={localFiles.filter((file) => file.status === "present" || Boolean(file.currentPath))
+               .map((file) => file.currentPath || file.path)} onCount={setNtfsCount} onSelect={() => setSelected(null)} />
           {renderRecords(downloadRecords.filter((record) => record.type === "download" && record.file.manager === "chrome"), "Chrome 下载")}
           {renderRecords(downloadRecords.filter((record) => record.type === "download" && record.file.manager === "aria2"), "Motrix／aria2 下载")}
         </section>
