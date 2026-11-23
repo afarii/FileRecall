@@ -42,7 +42,7 @@ export default function NtfsQuickResults({ query, enabled, onResults }: {
         if (!active) return;
         onResults({ query, files });
         const word = query.trim();
-        if (!files.length && (word.length >= 4 || /\\p{Script=Han}/u.test(word))) {
+        if (!files.length && (word.length >= 4 || /\p{Script=Han}/u.test(word))) {
           deepTimer = window.setTimeout(() => {
             void api.searchNtfsDeep(query).then((deepFiles) => {
               if (active) onResults({ query, files: deepFiles });
