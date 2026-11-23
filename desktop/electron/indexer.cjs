@@ -166,7 +166,8 @@ class FileIndex {
   isInternalPath(path) {
     const full = resolve(path);
     const profile = dirname(this.databasePath);
-    const internal = [this.databasePath, join(profile, "browser-downloads.sqlite"), join(profile, "ntfs-index.sqlite")]
+    const internal = [this.databasePath, join(profile, "browser-downloads.sqlite"), join(profile, "ntfs-index.sqlite"),
+      join(profile, "performance-diagnostics.jsonl"), join(profile, "performance-diagnostics.jsonl.old")]
       .flatMap((path) => [path, path + "-wal", path + "-shm"]);
     return internal.some((candidate) => process.platform === "win32"
       ? candidate.toLowerCase() === full.toLowerCase() : candidate === full);
