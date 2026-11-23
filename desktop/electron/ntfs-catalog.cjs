@@ -307,11 +307,12 @@ class NtfsCatalog {
     const others = filters(terms.filter((term) => term !== primary));
     const results = [];
     const seen = new Set();
+    const applicationData = this.applicationData;
     function collect(rows) {
       for (const row of rows) {
         if (seen.has(row.id)) continue;
         const path = fullPath(row)?.toLowerCase();
-        if (!path || path === this.applicationData || below(path, this.applicationData)) continue;
+        if (!path || path === applicationData || below(path, applicationData)) continue;
         seen.add(row.id);
         results.push(row);
         if (results.length === 100) break;
