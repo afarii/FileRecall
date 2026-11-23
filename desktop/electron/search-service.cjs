@@ -3,7 +3,7 @@
 const { Worker } = require("node:worker_threads");
 const { join } = require("node:path");
 
-function createSearchService({ localDatabase, ntfsDatabase, applicationData }) {
+function createSearchService({ localDatabase, ntfsDatabase, applicationData, onMetric = () => {} }) {
   const createChannel = (searchKind) => {
     const worker = new Worker(join(__dirname, "search-worker.cjs"), {
       workerData: { localDatabase, ntfsDatabase, applicationData },
@@ -31,7 +31,12 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData }) {
       pending.delete(reply.id);
       if (!pending.size) worker.unref();
       if (reply.error) item.reject(new Error(reply.error));
-      else item.resolve(reply.files);
+      else {
+        if (searchKind !== "shutdown" && reply.elapsedMs !== undefined) {
+          onMetric(searchKind, Date.now() - item.startedAt);
+        }
+        item.resolve(reply.files);
+      }
     });
     worker.on("error", fail);
     worker.on("exit", (code) => fail(new Error("搜索线程已退出：" + code)));
@@ -46,7 +51,7 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData }) {
           reject(new Error("搜索超时，请缩小查询范围"));
         }, 8000);
         timer.unref();
-        pending.set(id, { resolve, reject, timer });
+        pending.set(id, { resolve, reject, timer, startedAt: Date.now() });
         worker.ref();
         worker.postMessage({ id, kind, query, drives });
       });
