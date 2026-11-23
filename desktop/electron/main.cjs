@@ -173,6 +173,7 @@ app.whenReady().then(() => {
     localDatabase: databasePath,
     ntfsDatabase: ntfs ? join(userData, "ntfs-index.sqlite") : null,
     applicationData: userData,
+    onMetric: (kind, durationMs) => diagnostics.recordSearch(kind, durationMs),
   });
   const ntfsStatus = () => ntfs?.status() ?? { available: false, connected: false, drives: [] };
   ipcMain.handle("ntfs:status", ntfsStatus);
