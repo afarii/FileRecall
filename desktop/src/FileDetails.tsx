@@ -36,8 +36,9 @@ export function FileTile({ name }: { name: string }) {
     : ["PNG", "JPG", "JPEG", "GIF", "WEBP", "SVG"].includes(extension) ? "image"
     : ["ZIP", "RAR", "7Z", "TAR"].includes(extension) ? "archive"
     : ["SYS", "DLL", "EXE"].includes(extension) ? "system" : "file");
-  const label = ({ pdf: "PDF", document: "DOC", sheet: "XLS", slides: "PPT",
-    image: "IMG", archive: "ZIP", system: "SYS", file: extension.slice(0, 3) || "FILE" })[kind];
+  const labels: Record<string, string> = { pdf: "PDF", document: "DOC", sheet: "XLS", slides: "PPT",
+    image: "IMG", archive: "ZIP", system: "SYS", file: extension.slice(0, 3) || "FILE" };
+  const label = labels[kind] ?? "FILE";
   return <span className="file-tile" data-kind={kind} aria-hidden="true">{label}</span>;
 }
 
