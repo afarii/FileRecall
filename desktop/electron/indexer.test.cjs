@@ -480,3 +480,32 @@ test("MOTW evidence survives a rename and deletion, stays bound to file identity
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test("MOTW marker changes are captured from file events even when the main file mtime is unchanged", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "filerecall-motw-event-test-"));
+  const folder = join(workspace, "files");
+  const path = join(folder, "download.pdf");
+  let evidence = null;
+  let reads = 0;
+  let index;
+  try {
+    await mkdir(folder);
+    await writeFile(path, "synthetic");
+    index = new FileIndex(join(workspace, "index.sqlite"), {
+      trackMotw: true, motwReader: async () => { reads++; return evidence; },
+    });
+    await index.addRoot(folder);
+    assert.equal(reads, 1);
+    assert.equal(await index.motwEvidence(path), null);
+    evidence = { zoneId: 3, hostUrl: "https://example.org/download.pdf", referrerUrl: null };
+    await index.updatePaths(folder, [path]);
+    assert.equal(reads, 2);
+    assert.equal((await index.motwEvidence(path)).hostUrl, evidence.hostUrl);
+    await unlink(path);
+    await index.scan(folder);
+    assert.equal((await index.motwEvidence(path)).historical, true);
+  } finally {
+    index?.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
