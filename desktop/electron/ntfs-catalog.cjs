@@ -409,7 +409,9 @@ class NtfsCatalog {
     // The UI's fast path never performs an entire-volume substring scan.
     // Keep the complete scan available for explicit deep search and the
     // compatibility API, without putting it on the keystroke hot path.
-    if (fastOnly || results.length >= 100 || primary.length <= 2 || results.length >= 40) return rank(results);
+    if (fastOnly || results.length >= 100 ||
+        (primary.length <= 2 && /^[a-z0-9]+$/u.test(primary)) ||
+        results.length >= 40) return rank(results);
     const all = filters(terms);
     const infix = this.db.prepare(columns + " " + from +
       " WHERE i.drive = ? AND " + all.where + " LIMIT 200").all(drive, ...all.args);
