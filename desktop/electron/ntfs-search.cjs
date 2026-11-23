@@ -68,7 +68,7 @@ class NtfsSearch {
   notify() {
     if (this.closed) return;
     const status = this.status();
-    this.onActiveDrives(status.connected ? status.drives.filter(({ phase }) => phase === "ready" || phase === "building").map(({ drive }) => drive) : []);
+    this.onActiveDrives(status.connected ? status.drives.filter(({ phase }) => phase === "ready").map(({ drive }) => drive) : []);
     this.onChange(status);
   }
 
