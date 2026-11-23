@@ -72,7 +72,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedResults, setExpandedResults] = useState(false);
   useEffect(() => {
-    const timer = window.setTimeout(() => setSearchQuery(query), query.trim() ? 110 : 0);
+    const timer = window.setTimeout(() => setSearchQuery(query), query.trim() ? 25 : 0);
     return () => window.clearTimeout(timer);
   }, [query]);
   const [mode, setMode] = useState<"literal" | "semantic">("literal");
@@ -445,7 +445,7 @@ export default function App() {
           {!semanticMode && !hasResults && !loading && <p className="empty">{searchQuery.trim() || filter !== "all"
             ? "没有找到匹配的记录。" : "输入文件名、拼音或来源即可开始搜索。常用文件会显示在这里。"}</p>}
           {renderRecords(allRecords, semanticMode ? "相近内容" : "搜索结果")}
-          <NtfsQuickResults query={searchQuery} enabled={!semanticMode && (filter === "all" || filter === "local") && query === searchQuery}
+          <NtfsQuickResults query={searchQuery} enabled={!semanticMode && (filter === "all" || filter === "local")}
             onResults={setNtfsResult} />
         </section>
         {selectedRecord && (selectedRecord.type === "ntfs"
