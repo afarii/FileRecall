@@ -318,7 +318,7 @@ class NtfsCatalog {
       .run(drive, id, Date.now());
   }
 
-  search(drive, query) {
+  search(drive, query, { fastOnly = false } = {}) {
     const terms = queryTerms(query);
     if (!terms.length) return [];
     const rawPrimary = [...terms].sort((a, b) => b.length - a.length)[0];
@@ -406,9 +406,14 @@ class NtfsCatalog {
     // O(entire disk) infix scan on each keystroke while an input is still changing.
     if (results.length >= 100 || primary.length <= 2 || results.length >= 40) return rank(results);
 
-    // Interactive search stays on indexed prefix paths. A full MFT substring
-    // scan on every keystroke can take seconds on a multi-million-file volume.
-    // Users can explicitly request a deeper scan separately if needed.
+    // The UI's fast path never performs an entire-volume substring scan.
+    // Keep the complete scan available for explicit deep search and the
+    // compatibility API, without putting it on the keystroke hot path.
+    if (fastOnly || results.length >= 100 || primary.length <= 2 || results.length >= 40) return rank(results);
+    const all = filters(terms);
+    const infix = this.db.prepare(columns + " " + from +
+      " WHERE i.drive = ? AND " + all.where + " LIMIT 200").all(drive, ...all.args);
+    collect(infix);
     return rank(results);
 
     function rank(matches) {
