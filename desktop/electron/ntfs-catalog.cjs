@@ -86,12 +86,16 @@ class NtfsCatalog {
     this.db.prepare("DELETE FROM ntfs_parent WHERE drive = ?").run(drive);
   }
 
+  // Pausing a volume must preserve its persisted MFT snapshot. Users often
+  // pause before reinstalling and expect the index to resume immediately.
   disable(drive) {
-    this.transaction(() => {
-      this.discardRows(drive);
-      this.db.prepare("DELETE FROM ntfs_drive WHERE drive = ?").run(drive);
-      this.db.prepare("INSERT OR IGNORE INTO ntfs_excluded_drive VALUES (?)").run(drive);
-    });
+    this.db.prepare("INSERT OR IGNORE INTO ntfs_excluded_drive VALUES (?)").run(drive);
+  }
+
+  activeDrives() {
+    return this.db.prepare(`SELECT d.* FROM ntfs_drive d
+      WHERE NOT EXISTS (SELECT 1 FROM ntfs_excluded_drive x WHERE x.drive = d.drive)
+      ORDER BY d.drive`).all();
   }
 
   beginBuild(drive, journal, startUsn) {
@@ -390,11 +394,9 @@ class NtfsCatalog {
     // O(entire disk) infix scan on each keystroke while an input is still changing.
     if (results.length >= 100 || primary.length <= 2 || results.length >= 40) return rank(results);
 
-    // Preserve substring searches for longer, more selective queries.
-    const all = filters(terms);
-    const infix = this.db.prepare(columns + " " + from +
-      " WHERE i.drive = ? AND " + all.where + " LIMIT 200").all(drive, ...all.args);
-    collect(infix);
+    // Interactive search stays on indexed prefix paths. A full MFT substring
+    // scan on every keystroke can take seconds on a multi-million-file volume.
+    // Users can explicitly request a deeper scan separately if needed.
     return rank(results);
 
     function rank(matches) {
