@@ -66,17 +66,17 @@ test("confirmed origin and notes follow the file identity, never a replacement i
     index.annotate(state.identity, { favorite: true, note: "税务资料", tags: ["合同"] });
 
     await rename(path, moved);
-    await index.scan(folder);
+    await index.updatePaths(folder, [path, moved]);
     assert.equal((await index.linkedFile(id)).path, moved);
     assert.equal((await provenance.local(moved)).confirmed.id, id);
     assert.ok(index.search("税务资料").some((item) => item.path === moved && item.favorite === 1));
     await writeFile(path, "unrelated replacement");
     assert.equal((await provenance.local(path)).confirmed.id, id); // This row still represents the missing historical file.
-    await index.scan(folder);
+    await index.updatePaths(folder, [path]);
     assert.equal((await provenance.local(path)).confirmed, null);
     assert.equal(index.search("合同").some((item) => item.path === path), false);
     await unlink(moved);
-    await index.scan(folder);
+    await index.updatePaths(folder, [moved]);
     assert.equal((await index.linkedFile(id)).status, "missing");
     assert.equal(sources.sourceToOpen(id), url);
     assert.equal((await provenance.decide(moved, state.identity, id, "undo")).confirmed, null);

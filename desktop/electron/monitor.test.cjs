@@ -44,19 +44,29 @@ test("native recursive events update additions, modifications and tombstones, an
     await index.addRoot(folder);
     monitor.start();
     await until(() => monitor.status(folder).state === "watching");
+    let fullScans = 0;
+    const scan = index.scan.bind(index);
+    index.scan = (root) => { fullScans++; return scan(root); };
     await fs.mkdir(join(folder, "nested"));
     const path = join(folder, "nested", "auto.txt");
     await fs.writeFile(path, "new");
     await until(() => index.get(path)?.status === "present");
     await fs.writeFile(path, "modified contents");
     await until(() => index.search("auto.txt")[0]?.size === 17);
-    await fs.unlink(path);
+    const movedFolder = join(folder, "renamed");
+    const moved = join(movedFolder, "auto.txt");
+    await fs.rename(join(folder, "nested"), movedFolder);
     await until(() => index.get(path)?.status === "missing");
+    await until(() => index.get(moved)?.status === "present");
+    assert.equal((await index.movedTarget(path)), moved);
+    await fs.unlink(moved);
+    await until(() => index.get(moved)?.status === "missing");
     await monitor.run(() => { index.removeRoot(folder); monitor.syncRoots(); });
-    await fs.writeFile(path, "after revocation");
+    await fs.writeFile(moved, "after revocation");
     await delay(100);
-    assert.equal(index.get(path).status, "missing");
+    assert.equal(index.get(moved).status, "missing");
     assert.equal(monitor.entries.size, 0);
+    assert.equal(fullScans, 0);
   } finally {
     await monitor.close();
     index.close();
@@ -75,19 +85,26 @@ test("events coalesce and clearing history waits for an in-flight scan without r
     await fs.mkdir(folder);
     await fs.writeFile(join(folder, "file.txt"), "hello");
     await index.addRoot(folder);
-    let scans = 0;
-    const scan = index.scan.bind(index);
-    index.scan = async (path) => { scans++; return scan(path); };
+    let changes = 0;
+    const updatePaths = index.updatePaths.bind(index);
+    const batches = [];
+    index.updatePaths = async (root, paths) => {
+      batches.push(paths);
+      const result = await updatePaths(root, paths);
+      changes += result.changed;
+      return result;
+    };
     monitor.start();
     await until(() => monitor.status(folder).state === "watching");
     for (let i = 0; i < 20; i++) fake.watchers[0].change("file.txt");
-    await until(() => scans === 2);
+    await until(() => batches.length === 1);
     await monitor.tail;
     await delay(60);
-    assert.equal(scans, 2);
-    index.scan = async (path) => {
+    assert.deepEqual(batches, [[join(folder, "file.txt")]]);
+    assert.equal(changes, 0);
+    index.updatePaths = async (root, paths) => {
       await new Promise((resolve) => { release = resolve; });
-      return scan(path);
+      return updatePaths(root, paths);
     };
     fake.watchers[0].change("file.txt");
     await until(() => Boolean(release));
@@ -108,6 +125,29 @@ test("events coalesce and clearing history waits for an in-flight scan without r
   }
 });
 
+test("a Windows case-only rename keeps one present path and resolves the historical name", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const workspace = await fs.mkdtemp(join(tmpdir(), "filerecall-watch-"));
+  const folder = join(workspace, "files");
+  const index = new FileIndex(join(workspace, "index.sqlite"));
+  try {
+    await fs.mkdir(folder);
+    const old = join(folder, "Name.txt");
+    const current = join(folder, "name.txt");
+    await fs.writeFile(old, "content");
+    await index.addRoot(folder);
+    await fs.rename(old, current);
+    assert.equal((await index.updatePaths(folder, [old, current])).complete, true);
+    assert.equal(index.get(old).status, "missing");
+    assert.equal(index.get(current).status, "present");
+    assert.equal(await index.movedTarget(old), current);
+  } finally {
+    index.close();
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("periodic reconciliation recovers offline roots, failed watchers and missed events", async () => {
   const workspace = await fs.mkdtemp(join(tmpdir(), "filerecall-watch-"));
   const folder = join(workspace, "files");
@@ -116,7 +156,7 @@ test("periodic reconciliation recovers offline roots, failed watchers and missed
   const fake = fakeWatchers();
   let failWatch = true;
   const monitor = new DirectoryMonitor(index, {
-    debounceMs: 10, recoveryMs: 150,
+    debounceMs: 10, recoveryMs: 60, reconcileMs: 450,
     watchDirectory(...args) {
       if (failWatch) throw new Error("simulated watch failure");
       return fake.watchDirectory(...args);
@@ -127,16 +167,25 @@ test("periodic reconciliation recovers offline roots, failed watchers and missed
     const path = join(folder, "known.txt");
     await fs.writeFile(path, "hello");
     await index.addRoot(folder);
+    let scans = 0;
+    const scan = index.scan.bind(index);
+    index.scan = (path) => { scans++; return scan(path); };
     monitor.start();
     await until(() => monitor.status(folder).error.includes("simulated watch failure"));
     failWatch = false;
     await until(() => monitor.status(folder).state === "watching");
+    const recovered = scans;
+    const timestamp = index.search("known")[0].lastSeenAt;
+    await delay(180);
+    assert.equal(scans, recovered);
+    assert.equal(index.search("known")[0].lastSeenAt, timestamp);
     fake.watchers.at(-1).emit("error", new Error("simulated overflow"));
     await until(() => monitor.status(folder).state === "watching");
     await fs.rename(folder, offline);
     await until(() => monitor.status(folder).error.includes("ENOENT"));
     assert.equal(index.get(path).status, "present");
     await fs.rename(offline, folder);
+    await until(() => monitor.status(folder).state === "watching");
     await fs.writeFile(join(folder, "missed.txt"), "event deliberately omitted");
     await until(() => index.search("missed.txt").length === 1 && monitor.status(folder).state === "watching");
     assert.equal(index.get(path).status, "present");

@@ -247,6 +247,8 @@ test("overlapping roots detect missing files regardless of the last scanning roo
     await writeFile(path, "hello");
     await index.addRoot(nested);
     await index.addRoot(folder);
+    assert.equal((await index.scan(nested)).changed, 0);
+    assert.equal((await index.scan(folder)).changed, 0);
     await unlink(path);
     assert.equal((await index.scan(nested)).missing, 1);
     assert.equal(index.get(path).status, "missing");

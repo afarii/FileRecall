@@ -2,17 +2,21 @@
 
 const { watch } = require("node:fs");
 const { lstat } = require("node:fs/promises");
-const { join } = require("node:path");
+const { resolve } = require("node:path");
+const { directoryIdentity, isWithin } = require("./indexer.cjs");
+
+const MAX_PENDING_PATHS = 4096;
 
 class DirectoryMonitor {
   constructor(index, { onChange = () => {}, watchDirectory = watch,
-    debounceMs = 500, maxDelayMs = 2000, recoveryMs = 30000 } = {}) {
+    debounceMs = 500, maxDelayMs = 2000, recoveryMs = 30000, reconcileMs = 30 * 60 * 1000 } = {}) {
     this.index = index;
     this.onChange = onChange;
     this.watchDirectory = watchDirectory;
     this.debounceMs = debounceMs;
     this.maxDelayMs = maxDelayMs;
     this.recoveryMs = recoveryMs;
+    this.reconcileMs = reconcileMs;
     this.entries = new Map();
     this.tail = Promise.resolve();
     this.stopped = false;
@@ -28,14 +32,36 @@ class DirectoryMonitor {
 
   start() {
     this.syncRoots();
-    this.interval = setInterval(() => {
-      this.syncRoots();
-      for (const entry of this.entries.values()) {
-        entry.refreshWatcher = true;
-        this.requestScan(entry.path, 0);
-      }
-    }, this.recoveryMs);
+    this.interval = setInterval(() => void this.checkRoots(), this.recoveryMs);
     this.interval.unref();
+  }
+
+  async checkRoots() {
+    if (this.checkingRoots || this.stopped) return;
+    this.checkingRoots = true;
+    try {
+      for (const entry of this.entries.values()) {
+        if (this.stopped) break;
+        if (entry.watcher && entry.state !== "scanning" &&
+            entry.lastScanAt && Date.now() - entry.lastScanAt >= this.reconcileMs) {
+          if (!entry.fullScan) this.requestScan(entry.path, 0);
+          continue;
+        }
+        if (entry.pending || entry.timer) continue;
+        if (!entry.watcher || entry.state === "retrying") {
+          this.requestScan(entry.path, 0);
+          continue;
+        }
+        const identity = await lstat(entry.path, { bigint: true }).then(directoryIdentity, () => null);
+        if (this.entries.get(entry.path) !== entry || this.stopped || entry.pending || entry.timer) continue;
+        if (identity !== entry.identity) {
+          this.closeWatcher(entry);
+          this.requestScan(entry.path, 0);
+        }
+      }
+    } finally {
+      this.checkingRoots = false;
+    }
   }
 
   syncRoots() {
@@ -50,7 +76,7 @@ class DirectoryMonitor {
     }
     for (const path of roots) {
       if (this.entries.has(path)) continue;
-      this.entries.set(path, { path, state: "waiting", error: "", pending: false });
+      this.entries.set(path, { path, state: "waiting", error: "", pending: false, paths: new Set() });
       this.requestScan(path, 0);
     }
     this.onChange();
@@ -70,17 +96,23 @@ class DirectoryMonitor {
 
   async attachWatcher(entry) {
     this.closeWatcher(entry);
-    entry.refreshWatcher = false;
     entry.watchError = "";
     try {
-      const info = await lstat(entry.path);
-      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("目录不可用或已替换为链接。");
+      const identity = directoryIdentity(await lstat(entry.path, { bigint: true }));
+      if (!identity) throw new Error("目录不可用或已替换为链接。");
       if (this.stopped || this.entries.get(entry.path) !== entry) return;
       const watcher = this.watchDirectory(entry.path, { recursive: true, persistent: false }, (_event, filename) => {
-        if (filename && this.index.isInternalPath(join(entry.path, String(filename)))) return;
-        this.requestScan(entry.path);
+        if (entry.watcher !== watcher || this.stopped) return;
+        const path = filename ? resolve(entry.path, String(filename)) : entry.path;
+        if (!isWithin(entry.path, path) || entry.paths.size >= MAX_PENDING_PATHS) {
+          this.requestScan(entry.path);
+        } else if (!this.index.isInternalPath(path) && !entry.fullScan) {
+          entry.paths.add(path);
+          this.schedule(entry, this.debounceMs);
+        }
       });
       entry.watcher = watcher;
+      entry.identity = identity;
       const failed = (error) => {
         if (entry.watcher !== watcher || this.stopped) return;
         this.closeWatcher(entry);
@@ -100,10 +132,13 @@ class DirectoryMonitor {
   requestScan(path, delay = this.debounceMs) {
     const entry = this.entries.get(path);
     if (!entry || this.stopped) return;
-    if (entry.pending) {
-      entry.dirty = true;
-      return;
-    }
+    entry.fullScan = true;
+    entry.paths.clear();
+    this.schedule(entry, delay);
+  }
+
+  schedule(entry, delay) {
+    if (entry.pending) return;
     entry.burstAt ??= Date.now();
     clearTimeout(entry.timer);
     const wait = Math.max(0, Math.min(delay, entry.burstAt + this.maxDelayMs - Date.now()));
@@ -112,17 +147,29 @@ class DirectoryMonitor {
       entry.burstAt = null;
       entry.pending = true;
       this.run(async () => {
-        if (this.stopped || this.entries.get(path) !== entry) return;
-        await this.scanRoot(path);
+        if (this.stopped || this.entries.get(entry.path) !== entry) return;
+        const fullScan = entry.fullScan;
+        const paths = [...entry.paths];
+        entry.fullScan = false;
+        entry.paths.clear();
+        if (fullScan || !entry.watcher) {
+          await this.scanRoot(entry.path);
+          return;
+        }
+        const identity = directoryIdentity(await lstat(entry.path, { bigint: true }));
+        if (identity !== entry.identity) throw new Error("授权目录已更换，将重新连接监控。");
+        const result = await this.index.updatePaths(entry.path, paths);
+        if (!result.complete) throw new Error("变更路径尚未完整读取，将重新扫描授权目录。");
+        if (result.changed) this.onChange();
       }).catch((error) => {
+        this.closeWatcher(entry);
         entry.state = "retrying";
         entry.error = String(error.message || error);
         this.onChange();
       }).finally(() => {
         entry.pending = false;
-        if (entry.dirty) {
-          entry.dirty = false;
-          this.requestScan(path);
+        if (!this.stopped && this.entries.get(entry.path) === entry && (entry.fullScan || entry.paths.size)) {
+          this.schedule(entry, this.debounceMs);
         }
       });
     }, wait);
@@ -132,7 +179,11 @@ class DirectoryMonitor {
   async scanRoot(path) {
     const entry = this.entries.get(path);
     if (!entry || this.stopped) return null;
-    if (!entry.watcher || entry.refreshWatcher) await this.attachWatcher(entry);
+    if (entry.watcher) {
+      const identity = await lstat(path, { bigint: true }).then(directoryIdentity, () => null);
+      if (identity !== entry.identity) this.closeWatcher(entry);
+    }
+    if (!entry.watcher) await this.attachWatcher(entry);
     if (this.stopped) return null;
     entry.state = "scanning";
     this.onChange();

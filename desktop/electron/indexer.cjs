@@ -2,13 +2,46 @@
 
 const { randomUUID } = require("node:crypto");
 const fs = require("node:fs/promises");
-const { basename, dirname, isAbsolute, join, resolve, sep } = require("node:path");
+const { basename, dirname, isAbsolute, join, relative, resolve, sep } = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 const { canIndexText, textSignature, readText } = require("./text-content.cjs");
 
 function fileIdentity(info) {
   if (!info.isFile() || info.nlink !== 1n || info.dev <= 0n || info.ino <= 0n || info.birthtimeNs <= 0n) return null;
   return [info.dev, info.ino, info.birthtimeNs].join(":");
+}
+
+function isWithin(root, path) {
+  const child = relative(root, path);
+  return child !== "" && child !== ".." && !child.startsWith(".." + sep) && !isAbsolute(child);
+}
+
+function directoryIdentity(info) {
+  return info.isDirectory() && !info.isSymbolicLink()
+    ? [info.dev, info.ino, info.birthtimeNs].join(":") : null;
+}
+
+async function changedTarget(root, realRoot, path) {
+  for (let parent = dirname(path); isWithin(root, parent); parent = dirname(parent)) {
+    let info;
+    try {
+      info = await fs.lstat(parent);
+    } catch (error) {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR") return { path, info: null };
+      throw error;
+    }
+    if (!info.isDirectory() || info.isSymbolicLink()) return { path, info: null };
+  }
+  try {
+    const info = await fs.lstat(path, { bigint: true });
+    if (info.isSymbolicLink()) return { path, info: null };
+    const actual = await fs.realpath(path);
+    if (!isWithin(realRoot, actual)) throw new Error("变更路径已离开授权目录。");
+    return { path: join(root, relative(realRoot, actual)), info };
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return { path, info: null };
+    throw error;
+  }
 }
 
 const CURRENT_PATH = `
@@ -191,16 +224,52 @@ class FileIndex {
   }
 
   async scan(rawPath) {
+    const context = await this.scanContext(rawPath);
+    return this.scanScope(context, context.folder);
+  }
+
+  async updatePaths(rawPath, paths) {
+    const context = await this.scanContext(rawPath);
+    const { folder, realRoot } = context;
+    let changed = 0;
+    let complete = true;
+    const scopedPaths = new Set(paths.map((path) => resolve(path)));
+    for (const path of scopedPaths) {
+      if (!isWithin(folder, path) || this.isInternalPath(path)) continue;
+      let covered = false;
+      for (let parent = dirname(path); isWithin(folder, parent); parent = dirname(parent)) {
+        if (scopedPaths.has(parent)) { covered = true; break; }
+      }
+      if (covered) continue;
+      const target = await changedTarget(folder, realRoot, path);
+      const scope = await this.scanScope(context, target.path, target.info);
+      changed += scope.changed;
+      complete &&= scope.complete;
+      if (process.platform === "win32" && scope.complete &&
+          target.path !== path && path.toLowerCase() === target.path.toLowerCase()) {
+        const previous = await this.scanScope(context, path, null);
+        changed += previous.changed;
+      }
+    }
+    return { changed, complete };
+  }
+
+  async scanContext(rawPath) {
     const folder = resolve(rawPath);
     if (!this.db.prepare("SELECT 1 FROM roots WHERE path = ?").get(folder)) {
       throw new Error("文件夹尚未获得授权。");
     }
-    const info = await fs.lstat(folder);
-    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("扫描目录已不存在或无法访问。");
+    const identity = directoryIdentity(await fs.lstat(folder, { bigint: true }));
+    if (!identity) throw new Error("扫描目录已不存在或无法访问。");
+    const realRoot = await fs.realpath(folder);
+    const nested = this.roots().map((root) => root.path).filter((path) => isWithin(folder, path))
+      .sort((left, right) => right.length - left.length);
+    return { folder, identity, realRoot, textRoot: this.textEnabled() ? realRoot : null, nested };
+  }
 
+  async scanScope({ folder, identity, textRoot, nested }, path, target) {
     const token = randomUUID();
     const now = Date.now();
-    const textRoot = this.textEnabled() ? await fs.realpath(folder) : null;
     const lookupText = this.db.prepare("SELECT signature FROM file_text WHERE path = ?");
     const saveText = this.db.prepare("INSERT OR REPLACE INTO file_text VALUES (?, ?, ?)");
     const deleteText = this.db.prepare("DELETE FROM file_text WHERE path = ?");
@@ -217,11 +286,38 @@ class FileIndex {
         identity_verified = CASE WHEN files.file_identity = excluded.file_identity THEN files.identity_verified ELSE 0 END,
         file_identity = excluded.file_identity,
         status = 'present'
+      WHERE files.root_path <> excluded.root_path OR files.name <> excluded.name
+        OR files.size <> excluded.size OR files.modified_at <> excluded.modified_at
+        OR files.file_identity IS NOT excluded.file_identity OR files.status <> 'present'
     `);
-    const stack = [folder];
-    let indexed = 0;
+    const stack = target === undefined || target?.isDirectory() ? [path] : [];
+    const seen = new Set();
+    let changed = 0;
     let skipped = 0;
 
+    const visitFile = async (full, info) => {
+      let text;
+      let signature;
+      if (textRoot) {
+        const cached = lookupText.get(full);
+        if (canIndexText(full, info.size)) {
+          signature = textSignature(info);
+          if (cached?.signature !== signature) {
+            text = await readText(full, textRoot, signature).catch(() => null);
+          }
+        } else if (cached) {
+          text = null;
+        }
+        if (text !== undefined && cached) changed += Number(deleteText.run(full).changes);
+      }
+      const root = nested.find((candidate) => isWithin(candidate, full)) ?? folder;
+      changed += Number(upsert.run(full, root, basename(full), Number(info.size), Number(info.mtimeNs) / 1e6,
+        now, now, token, fileIdentity(info)).changes);
+      if (typeof text === "string") changed += Number(saveText.run(full, signature, text).changes);
+      seen.add(full);
+    };
+
+    if (target?.isFile() && !this.isInternalPath(path)) await visitFile(path, target);
     while (stack.length > 0) {
       const dir = stack.pop();
       let entries;
@@ -257,25 +353,7 @@ class FileIndex {
             skipped++;
             continue;
           }
-          let text;
-          let signature;
-          if (textRoot) {
-            const cached = lookupText.get(full);
-            if (canIndexText(full, info.size)) {
-              signature = textSignature(info);
-              if (cached?.signature !== signature) {
-                text = await readText(full, textRoot, signature).catch(() => null);
-              }
-            } else if (cached) {
-              text = null;
-            }
-            if (text !== undefined && cached) deleteText.run(full);
-          }
-          // Database failures must reach the caller and prevent missing-file updates.
-          upsert.run(full, folder, basename(full), Number(info.size), Number(info.mtimeNs) / 1e6,
-            now, now, token, fileIdentity(info));
-          if (typeof text === "string") saveText.run(full, signature, text);
-          indexed++;
+          await visitFile(full, info);
         }
       }
     }
@@ -283,22 +361,39 @@ class FileIndex {
     // A partial scan must never falsely classify an unreadable subtree as deleted.
     let missing = 0;
     if (skipped === 0) {
-      const prefix = folder.endsWith(sep) ? folder : folder + sep;
-      this.db.exec("BEGIN IMMEDIATE");
-      try {
-        this.db.prepare("UPDATE files SET identity_verified = 1 WHERE scan_token = ? AND file_identity IS NOT NULL AND identity_verified = 0").run(token);
-        const result = this.db.prepare(`
-          UPDATE files SET status = 'missing'
-          WHERE substr(path, 1, length(?)) = ? AND scan_token <> ? AND status = 'present'
-        `).run(prefix, prefix, token);
-        this.db.exec("COMMIT");
-        missing = Number(result.changes);
-      } catch (error) {
-        this.db.exec("ROLLBACK");
-        throw error;
+      if (directoryIdentity(await fs.lstat(folder, { bigint: true })) !== identity) {
+        throw new Error("扫描期间授权目录已更换。");
+      }
+      // The path index can find an entire subtree as a range on its separator.
+      const prefix = path.endsWith(sep) ? path : path + sep;
+      const upper = prefix.slice(0, -1) + String.fromCharCode(sep.charCodeAt(0) + 1);
+      const removed = [];
+      const verify = [];
+      const existing = this.db.prepare(`
+        SELECT path, identity_verified AS verified, file_identity AS identity FROM files
+        WHERE (path = ? OR (path >= ? AND path < ?)) AND status = 'present'
+      `);
+      for (const record of existing.iterate(path, prefix, upper)) {
+        if (!seen.has(record.path)) removed.push(record.path);
+        else if (record.identity && !record.verified) verify.push(record.path);
+      }
+      if (removed.length || verify.length) {
+        const markMissing = this.db.prepare("UPDATE files SET status = 'missing' WHERE path = ?");
+        const markVerified = this.db.prepare("UPDATE files SET identity_verified = 1 WHERE path = ?");
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+          for (const removedPath of removed) markMissing.run(removedPath);
+          for (const verifiedPath of verify) markVerified.run(verifiedPath);
+          this.db.exec("COMMIT");
+          missing = removed.length;
+          changed += missing + verify.length;
+        } catch (error) {
+          this.db.exec("ROLLBACK");
+          throw error;
+        }
       }
     }
-    return { folder, indexed, skipped, missing, complete: skipped === 0 };
+    return { folder, indexed: seen.size, skipped, missing, complete: skipped === 0, changed };
   }
 
   search(rawQuery = "") {
@@ -439,4 +534,4 @@ class FileIndex {
   }
 }
 
-module.exports = { FileIndex };
+module.exports = { FileIndex, directoryIdentity, isWithin };
