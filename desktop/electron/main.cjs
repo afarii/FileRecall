@@ -26,6 +26,7 @@ let aria2;
 let updates;
 let ntfs;
 let ntfsClosing;
+let searchKeyTimer;
 let updateNotification;
 let tray;
 let closing = false;
@@ -347,6 +348,24 @@ app.whenReady().then(() => {
   if (process.platform === "win32" && Tray) createTray();
   createWindow();
   monitor.start();
+  // Existing authorized-folder indexes migrate in bounded background batches.
+  let searchKeyRounds = 0;
+  searchKeyTimer = setInterval(() => {
+    if (closing || !index) return;
+    try {
+      const updated = index.backfillSearchKeys(250);
+      if (!updated) {
+        clearInterval(searchKeyTimer);
+        searchKeyTimer = undefined;
+      } else if (++searchKeyRounds % 12 === 0) {
+        notifyChanged();
+      }
+    } catch {
+      clearInterval(searchKeyTimer);
+      searchKeyTimer = undefined;
+    }
+  }, 100);
+  searchKeyTimer.unref();
   // The window stays responsive while the read-only helper requests Windows authorization.
   if (ntfs) void ntfs.startAutomatically().catch(() => {});
   app.on("activate", showWindow);
@@ -361,6 +380,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", (event) => {
   if (!closing) {
+    clearInterval(searchKeyTimer);
     hotkey?.close();
     semantic?.clear();
     aria2?.close();
