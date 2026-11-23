@@ -64,6 +64,23 @@ class FileIndex {
         signature TEXT NOT NULL,
         content TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS source_decisions (
+        file_identity TEXT NOT NULL,
+        download_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('confirmed', 'rejected')),
+        PRIMARY KEY(file_identity, download_id)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS confirmed_source_by_file
+        ON source_decisions(file_identity) WHERE decision = 'confirmed';
+      CREATE UNIQUE INDEX IF NOT EXISTS confirmed_file_by_source
+        ON source_decisions(download_id) WHERE decision = 'confirmed';
+      CREATE TABLE IF NOT EXISTS file_annotations (
+        file_identity TEXT PRIMARY KEY,
+        favorite INTEGER NOT NULL,
+        note TEXT NOT NULL,
+        tags TEXT NOT NULL,
+        search_text TEXT NOT NULL
+      );
     `);
     const columns = new Set(this.db.prepare("PRAGMA table_info(files)").all().map((column) => column.name));
     if (!columns.has("file_identity")) this.db.exec("ALTER TABLE files ADD COLUMN file_identity TEXT");
@@ -147,6 +164,11 @@ class FileIndex {
         .run(folder, prefix, prefix);
       const result = this.db.prepare(`DELETE FROM files WHERE substr(path, 1, length(?)) = ? ${collation}`)
         .run(prefix, prefix);
+      this.db.exec(`DELETE FROM source_decisions WHERE NOT EXISTS (
+        SELECT 1 FROM files WHERE files.file_identity = source_decisions.file_identity
+      ); DELETE FROM file_annotations WHERE NOT EXISTS (
+        SELECT 1 FROM files WHERE files.file_identity = file_annotations.file_identity
+      )`);
       this.db.exec("COMMIT");
       return Number(result.changes);
     } catch (error) {
@@ -288,17 +310,111 @@ class FileIndex {
       SELECT files.path, root_path AS rootPath, name, size, modified_at AS modifiedAt,
              first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, status,
              ${CURRENT_PATH} AS currentPath, ${POSSIBLE_PATH} AS possiblePath,
-             coalesce(${textMatch}, 0) AS textMatched
+             coalesce(${textMatch}, 0) AS textMatched,
+             coalesce(file_annotations.favorite, 0) AS favorite,
+             coalesce(instr(file_annotations.search_text, ?), 0) > 0 AND ? <> '' AS annotationMatched
       FROM files
       ${searchText ? "LEFT JOIN file_text ON file_text.path = files.path" : ""}
-      WHERE name LIKE ? ESCAPE '\\' OR files.path LIKE ? ESCAPE '\\' OR textMatched = 1
-      ORDER BY CASE WHEN status = 'present' OR currentPath IS NOT NULL THEN 0 ELSE 1 END, last_seen_at DESC
+      LEFT JOIN file_annotations ON file_annotations.file_identity = files.file_identity AND files.identity_verified = 1
+      WHERE name LIKE ? ESCAPE '\\' OR files.path LIKE ? ESCAPE '\\' OR textMatched = 1 OR annotationMatched = 1
+      ORDER BY favorite DESC, CASE WHEN status = 'present' OR currentPath IS NOT NULL THEN 0 ELSE 1 END, last_seen_at DESC
       LIMIT 500
-    `).all(...(searchText ? [query.toLowerCase(), pattern, pattern] : [pattern, pattern]));
+    `).all(...(searchText ? [query.toLowerCase()] : []), query.toLowerCase(), query, pattern, pattern);
   }
 
   get(path) {
-    return this.db.prepare("SELECT path, status FROM files WHERE path = ?").get(path);
+    return this.db.prepare("SELECT path, status, file_identity AS identity FROM files WHERE path = ?").get(path);
+  }
+
+  semanticMatch({ path, signature }) {
+    return this.db.prepare(`
+      SELECT files.path, root_path AS rootPath, name, size, modified_at AS modifiedAt,
+             first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, status,
+             ${CURRENT_PATH} AS currentPath, ${POSSIBLE_PATH} AS possiblePath, 0 AS textMatched,
+             coalesce(file_annotations.favorite, 0) AS favorite, 0 AS annotationMatched
+      FROM files JOIN file_text ON file_text.path = files.path
+      LEFT JOIN file_annotations ON file_annotations.file_identity = files.file_identity AND files.identity_verified = 1
+      WHERE files.path = ? AND signature = ?
+    `).get(path, signature);
+  }
+
+  async sourceIdentity(path) {
+    if (typeof path !== "string") return null;
+    const lookup = this.db.prepare(`
+      SELECT file_identity AS identity, status FROM files WHERE path = ? AND identity_verified = 1
+    `);
+    const record = lookup.get(path);
+    if (!record?.identity || record.status === "missing") return record?.identity ?? null;
+    try {
+      const identity = fileIdentity(await fs.lstat(path, { bigint: true }));
+      return identity === record.identity && lookup.get(path)?.identity === identity ? identity : null;
+    } catch { return null; }
+  }
+
+  sourceAliases(identity) {
+    return this.db.prepare(`
+      SELECT path, name, first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, status
+      FROM files WHERE file_identity = ? AND identity_verified = 1
+      ORDER BY first_seen_at, path LIMIT 20
+    `).all(identity);
+  }
+
+  annotation(identity) {
+    const row = this.db.prepare("SELECT favorite, note, tags FROM file_annotations WHERE file_identity = ?").get(identity);
+    return row ? { favorite: Boolean(row.favorite), note: row.note, tags: JSON.parse(row.tags) } : { favorite: false, note: "", tags: [] };
+  }
+
+  annotate(identity, input) {
+    if (typeof input?.favorite !== "boolean" || typeof input.note !== "string" || input.note.length > 1000
+      || !Array.isArray(input.tags) || input.tags.length > 10
+      || input.tags.some((tag) => typeof tag !== "string" || tag.length > 30)) throw new Error("备注或标签格式无效。");
+    const tags = [...new Set(input.tags.map((tag) => tag.trim()).filter(Boolean))];
+    const note = input.note.trim();
+    if (!input.favorite && !note && !tags.length) {
+      this.db.prepare("DELETE FROM file_annotations WHERE file_identity = ?").run(identity);
+    } else {
+      this.db.prepare(`
+        INSERT INTO file_annotations VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(file_identity) DO UPDATE SET favorite=excluded.favorite,
+          note=excluded.note, tags=excluded.tags, search_text=excluded.search_text
+      `).run(identity, Number(input.favorite), note, JSON.stringify(tags), [note, ...tags].join("\n").toLowerCase());
+    }
+    return this.annotation(identity);
+  }
+
+  sourceDecisions(identity) {
+    return this.db.prepare("SELECT download_id AS id, decision FROM source_decisions WHERE file_identity = ?").all(identity);
+  }
+
+  linkedIdentity(id) {
+    return this.db.prepare(`
+      SELECT file_identity AS identity FROM source_decisions WHERE download_id = ? AND decision = 'confirmed'
+    `).get(id)?.identity ?? null;
+  }
+
+  async linkedFile(id) {
+    const identity = this.linkedIdentity(id);
+    if (!identity) return null;
+    const files = this.db.prepare(`
+      SELECT path, name, status FROM files WHERE identity_verified = 1 AND file_identity = ?
+      ORDER BY status DESC, last_seen_at DESC, path
+    `).all(identity);
+    for (const file of files) {
+      if (await this.sourceIdentity(file.path) === identity) return file;
+    }
+    return null;
+  }
+
+  decideSource(identity, id, decision) {
+    if (decision === "undo") {
+      this.db.prepare("DELETE FROM source_decisions WHERE file_identity = ? AND download_id = ?")
+        .run(identity, id);
+      return;
+    }
+    this.db.prepare(`
+      INSERT INTO source_decisions VALUES (?, ?, ?)
+      ON CONFLICT(file_identity, download_id) DO UPDATE SET decision = excluded.decision
+    `).run(identity, id, decision);
   }
 
   async movedTarget(path) {

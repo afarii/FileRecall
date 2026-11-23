@@ -7,6 +7,11 @@ files:
   - electron/*.cjs
   - "!electron/*.test.cjs"
   - "!electron/launch.cjs"
+  - "!node_modules/onnxruntime-node/bin/napi-v3/{darwin,linux}/**"
+  - "!node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**"
+asarUnpack:
+  - "**/onnxruntime-node/bin/**"
+npmRebuild: false
 extraResources:
   - from: .package-host
     to: native

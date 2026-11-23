@@ -1,6 +1,11 @@
 "use strict";
 
 const { contextBridge, ipcRenderer } = require("electron");
+const subscribe = (channel, callback) => {
+  const listener = (_event, value) => callback(value);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+};
 
 contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   folders: () => ipcRenderer.invoke("folders:list"),
@@ -16,10 +21,21 @@ contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   chromeStatus: () => ipcRenderer.invoke("chrome:status"),
   connectChrome: (id) => ipcRenderer.invoke("chrome:connect", id),
   openSource: (id) => ipcRenderer.invoke("downloads:open-source", id),
+  openLinkedSource: (path, id) => ipcRenderer.invoke("provenance:open-source", path, id),
+  provenance: (path) => ipcRenderer.invoke("provenance:local", path),
+  decideSource: (path, identity, id, decision) => ipcRenderer.invoke("provenance:decide", path, identity, id, decision),
+  linkedFile: (id) => ipcRenderer.invoke("provenance:download", id),
+  annotate: (path, identity, input) => ipcRenderer.invoke("files:annotate", path, identity, input),
+  openFile: (path) => ipcRenderer.invoke("files:open", path),
+  copyPath: (kind, key) => ipcRenderer.invoke("files:copy-path", kind, key),
   reveal: (path) => ipcRenderer.invoke("files:reveal", path),
-  onChanged: (callback) => {
-    const listener = () => callback();
-    ipcRenderer.on("library:changed", listener);
-    return () => ipcRenderer.removeListener("library:changed", listener);
-  },
+  hotkey: () => ipcRenderer.invoke("hotkey:status"),
+  setHotkey: (value) => ipcRenderer.invoke("hotkey:update", value),
+  semanticStatus: () => ipcRenderer.invoke("semantic:status"),
+  installSemantic: () => ipcRenderer.invoke("semantic:install"),
+  semanticSearch: (query) => ipcRenderer.invoke("semantic:search", query),
+  onSearchFocus: (callback) => subscribe("search:focus", callback),
+  onModelProgress: (callback) => subscribe("semantic:download-progress", callback),
+  onSemanticProgress: (callback) => subscribe("semantic:search-progress", callback),
+  onChanged: (callback) => subscribe("library:changed", callback),
 }));

@@ -1,3 +1,6 @@
+import { useEffect, useState } from "react";
+import FileNotes from "./FileNotes";
+
 export type SearchRecord =
   | { type: "local"; file: FileRecord }
   | { type: "chrome"; file: BrowserDownload };
@@ -45,6 +48,58 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
 }) {
   const { file } = record;
   const status = recordStatus(record);
+  const localFile = record.type === "local" ? record.file : null;
+  const browserId = record.type === "chrome" ? record.file.id : null;
+  const [provenance, setProvenance] = useState<FileProvenance>();
+  const [linked, setLinked] = useState<Pick<FileRecord, "path" | "name" | "status"> | null>(null);
+  const [deciding, setDeciding] = useState(false);
+  const [sourceError, setSourceError] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    if (localFile) {
+      window.fileRecall.provenance(localFile.path).then((state) => {
+        if (active) setProvenance(state);
+      }).catch(() => { if (active) setSourceError("无法读取文件来历。"); });
+    } else if (browserId) {
+      window.fileRecall.linkedFile(browserId).then((value) => {
+        if (active) setLinked(value);
+      }).catch(() => { if (active) setSourceError("无法读取关联的本地文件。"); });
+    }
+    return () => { active = false; };
+  }, [localFile?.path, localFile?.status, localFile?.currentPath, localFile?.modifiedAt, browserId]);
+
+  async function decideSource(id: string, decision: SourceDecision) {
+    if (!localFile || !provenance?.identity) return;
+    setDeciding(true);
+    setSourceError("");
+    try {
+      setProvenance(await window.fileRecall.decideSource(localFile.path, provenance.identity, id, decision));
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : "无法更新文件关联。");
+    } finally { setDeciding(false); }
+  }
+
+  const confirmed = provenance?.confirmed;
+  async function fileAction(action: "open" | "copy") {
+    setActionMessage("");
+    try {
+      if (action === "open") {
+        const result = await window.fileRecall.openFile(file.path);
+        if (!result.ok) setActionMessage(result.message ?? "无法打开此文件。");
+      } else {
+        const copied = await window.fileRecall.copyPath(record.type, browserId ?? file.path);
+        setActionMessage(copied ? "路径已复制。" : "无法复制路径。");
+      }
+    } catch { setActionMessage("文件操作失败，请重试。"); }
+  }
+  async function openLinkedSource(id: string) {
+    setActionMessage("");
+    try {
+      if (!await window.fileRecall.openLinkedSource(file.path, id)) setActionMessage("当前没有可打开的可信来源。");
+    } catch { setActionMessage("无法打开来源页面。"); }
+  }
   return <aside className="file-details" id="file-details" aria-label="文件详情">
     <div className="detail-heading"><span>文件详情</span>
       <button type="button" className="icon-button" aria-label="关闭文件详情" onClick={onClose}>×</button>
@@ -60,22 +115,65 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
           {record.file.status === "missing" && <><dt>原路径</dt><dd>{file.path}</dd></>}
           {!record.file.currentPath && record.file.possiblePath && <><dt>未确认候选</dt><dd>{record.file.possiblePath}</dd></>}
         </dl>
-        {(record.file.currentPath || record.file.status === "present") &&
-          <button onClick={() => reveal(file.path)}>{record.file.currentPath ? "定位现址" : "在文件夹中显示"}</button>}
+        <div className="actions">
+          {(record.file.currentPath || record.file.status === "present") && <>
+            <button onClick={() => reveal(file.path)}>{record.file.currentPath ? "定位现址" : "在文件夹中显示"}</button>
+            <button className="secondary" onClick={() => void fileAction("open")}>打开文件</button>
+          </>}
+          <button className="secondary" onClick={() => void fileAction("copy")}>复制路径</button>
+        </div>
       </section>
       <section className="detail-section">
         <h3>文件记录</h3>
         <dl><dt>大小</dt><dd>{formatSize(record.file.size)}</dd>
-          <dt>最近发现</dt><dd>{new Date(record.file.lastSeenAt).toLocaleString()}</dd>
-          <dt>来源</dt><dd>来源未知</dd></dl>
+          <dt>首次发现</dt><dd>{new Date(record.file.firstSeenAt).toLocaleString()}</dd>
+          <dt>最近发现</dt><dd>{new Date(record.file.lastSeenAt).toLocaleString()}</dd></dl>
+        {provenance && provenance.aliases.length > 1 && <details className="path-history">
+          <summary>查看观察到的路径</summary>
+          {provenance.aliases.map((alias) => <p key={alias.path}>{new Date(alias.firstSeenAt).toLocaleString()} · {alias.path}</p>)}
+        </details>}
       </section>
+      <section className="detail-section">
+        <h3>文件来历</h3>
+        {confirmed ? <>
+          <span className="badge good">文件关联已确认</span>
+          <dl>
+            <dt>原下载路径</dt><dd>{confirmed.path}</dd>
+            <dt>网页来源</dt><dd>{[confirmed.domain, confirmed.sourceTitle].filter(Boolean).join(" · ") || sourceLabels[confirmed.sourceStatus]}</dd>
+          </dl>
+          <div className="actions">
+            {confirmed.canOpenSource && <button onClick={() => void openLinkedSource(confirmed.id)}>打开来源页面 ↗</button>}
+            <button className="secondary" disabled={deciding} onClick={() => void decideSource(confirmed.id, "undo")}>撤销关联</button>
+          </div>
+        </> : <p className="muted">{provenance ? "来源未知" : "正在读取来历…"}</p>}
+        {!confirmed && provenance?.candidates.map((candidate) => <div className="source-candidate" key={candidate.id}>
+          <strong>{candidate.name}</strong> <span className="badge warn">{candidate.evidence} · 待核对</span>
+          <p>{candidate.path}</p>
+          <p className="muted">{[candidate.domain, candidate.sourceTitle, new Date(candidate.startedAt).toLocaleString()].filter(Boolean).join(" · ")}</p>
+          <div className="actions">
+            <button disabled={deciding} onClick={() => void decideSource(candidate.id, "confirmed")}>确认是同一文件</button>
+            <button className="secondary" disabled={deciding} onClick={() => void decideSource(candidate.id, "rejected")}>排除</button>
+          </div>
+        </div>)}
+        {provenance?.rejected.map((item) => <div className="source-candidate" key={item.id}>
+          <p className="muted">已排除 · {item.name} · {item.path}</p>
+          <button className="secondary" disabled={deciding} onClick={() => void decideSource(item.id, "undo")}>撤销排除</button>
+        </div>)}
+      </section>
+      {provenance?.identity && provenance.annotation &&
+        <FileNotes key={provenance.identity} path={file.path} identity={provenance.identity} initial={provenance.annotation} />}
     </> : <>
       <section className="detail-section">
         <h3>下载记录</h3><dl>
           <dt>原路径</dt><dd>{file.path}</dd>
           <dt>原路径状态</dt><dd>{{ present: "原路径有文件", missing: "原路径已丢失", unknown: "原路径状态未知" }[record.file.pathStatus]}</dd>
           <dt>下载时间</dt><dd>{new Date(record.file.startedAt).toLocaleString()}</dd>
+          {linked && <><dt>{linked.status === "present" ? "当前位置" : "关联的历史路径"}</dt><dd>{linked.path}</dd></>}
         </dl>
+        <div className="actions">
+          {linked?.status === "present" && <button onClick={() => reveal(linked.path)}>定位现址</button>}
+          <button className="secondary" onClick={() => void fileAction("copy")}>复制原路径</button>
+        </div>
       </section>
       <section className="detail-section">
         <h3>文件来源</h3>
@@ -84,5 +182,7 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
         {record.file.sourceStatus === "candidate" && <p className="muted">可在 Chrome 扩展中核对来源。</p>}
       </section>
     </>}
+    {sourceError && <p className="error" role="alert">{sourceError}</p>}
+    {actionMessage && <p className="muted" role="status">{actionMessage}</p>}
   </aside>;
 }

@@ -2,12 +2,14 @@
 
 const fs = require("node:fs/promises");
 const { extname, isAbsolute, relative, sep } = require("node:path");
+const { readPdfText, readWordText } = require("./document-text.cjs");
 
 const maxBytes = 128 * 1024;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 
 function canIndexText(path, size) {
   const extension = extname(path).toLowerCase();
+  if (extension === ".pdf" || extension === ".docx") return size <= 20n * 1024n * 1024n;
   return (extension === ".txt" || extension === ".md") && size <= BigInt(maxBytes);
 }
 
@@ -33,7 +35,10 @@ async function readText(path, root, signature) {
     const after = await handle.stat({ bigint: true });
     if (offset !== Number(before.size) || textSignature(after) !== signature) return null;
     try {
-      const text = utf8.decode(buffer.subarray(0, offset));
+      const bytes = buffer.subarray(0, offset);
+      const extension = extname(path).toLowerCase();
+      const text = extension === ".pdf" ? await readPdfText(bytes) :
+        extension === ".docx" ? await readWordText(bytes) : utf8.decode(bytes);
       return text.includes("\0") ? "" : text.toLowerCase();
     } catch {
       return "";

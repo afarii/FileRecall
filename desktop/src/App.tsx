@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ChromeConnection from "./ChromeConnection";
+import HotkeySettings from "./HotkeySettings";
+import useSemanticSearch from "./useSemanticSearch";
 import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } from "./FileDetails";
 import logo from "../../filerecall.svg";
 
@@ -11,10 +13,14 @@ export default function App() {
   const [localResult, setLocalResult] = useState<{ query: string; files: FileRecord[] }>();
   const [browserResult, setBrowserResult] = useState<{ query: string; files: BrowserDownload[]; error?: string }>();
   const [downloadRefresh, setDownloadRefresh] = useState(0);
-  const [filter, setFilter] = useState<"all" | "local" | "chrome" | "missing">("all");
+  const [filter, setFilter] = useState<"all" | "local" | "chrome" | "missing" | "favorites" | "trusted" | "candidate">("all");
   const [selected, setSelected] = useState<string | null>(null);
   const selectedButton = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<"literal" | "semantic">("literal");
+  const searchInput = useRef<HTMLInputElement | null>(null);
+  const resultPane = useRef<HTMLElement | null>(null);
+  const semantic = useSemanticSearch();
   const currentQuery = useRef(query);
   currentQuery.current = query;
   const reloadVersion = useRef(0);
@@ -48,6 +54,11 @@ export default function App() {
   useEffect(() => {
     window.fileRecall.textEnabled().then(setTextEnabled).catch(() => setError("无法读取正文搜索设置。"));
   }, []);
+
+  useEffect(() => window.fileRecall.onSearchFocus(() => {
+    setView("files");
+    window.setTimeout(() => { searchInput.current?.focus(); searchInput.current?.select(); }, 0);
+  }), []);
 
   const refreshDownloads = useCallback(() => setDownloadRefresh((value) => value + 1), []);
 
@@ -97,6 +108,7 @@ export default function App() {
     setError("");
     try {
       await window.fileRecall.setTextEnabled(enabled);
+      if (!enabled) semantic.invalidate();
       setTextEnabled(enabled);
       setNotice(enabled ? "已开启正文搜索，授权目录会自动重扫。" : "已关闭正文搜索并清除正文索引。");
       await reload(currentQuery.current);
@@ -152,6 +164,7 @@ export default function App() {
     setError("");
     try {
       await window.fileRecall.removeFolder(path);
+      semantic.invalidate();
       setNotice(`已停止索引 ${path}，历史记录仍可搜索。`);
       await reload(currentQuery.current);
     } catch (err) {
@@ -167,6 +180,7 @@ export default function App() {
     setError("");
     try {
       const removed = await window.fileRecall.clearHistory(clearingFolder);
+      semantic.invalidate();
       setClearingFolder(null);
       setNotice(`已清除 ${removed} 条历史记录，磁盘文件保留。`);
       await reload(currentQuery.current);
@@ -180,15 +194,23 @@ export default function App() {
 
   const local = localResult?.query === query ? localResult : undefined;
   const browser = browserResult?.query === query ? browserResult : undefined;
-  const localRecords: SearchRecord[] = (filter === "chrome" ? [] : (local?.files ?? []))
-    .filter((file) => filter !== "missing" || (file.status === "missing" && !file.currentPath))
+  const semanticMode = mode === "semantic";
+  const semanticResult = semantic.result?.query === query ? semantic.result.result : undefined;
+  const downloadsOnly = filter === "chrome" || filter === "trusted" || filter === "candidate";
+  const localOnly = filter === "local" || filter === "favorites";
+  const localFiles = semanticMode ? (semanticResult?.files ?? []) : (downloadsOnly ? [] : (local?.files ?? []));
+  const localRecords: SearchRecord[] = localFiles
+    .filter((file) => semanticMode || filter !== "missing" || (file.status === "missing" && !file.currentPath))
+    .filter((file) => semanticMode || filter !== "favorites" || file.favorite === 1)
     .map((file) => ({ type: "local", file }));
-  const chromeRecords: SearchRecord[] = (filter === "local" ? [] : (browser?.files ?? []))
+  const chromeRecords: SearchRecord[] = (semanticMode || localOnly ? [] : (browser?.files ?? []))
     .filter((file) => filter !== "missing" || file.pathStatus === "missing")
+    .filter((file) => filter !== "trusted" || file.canOpenSource)
+    .filter((file) => filter !== "candidate" || file.sourceStatus === "candidate")
     .map((file) => ({ type: "chrome", file }));
   const selectedRecord = [...localRecords, ...chromeRecords].find((record) => recordKey(record) === selected);
   const hasResults = localRecords.length + chromeRecords.length > 0;
-  const loading = (!error && filter !== "chrome" && !local) || (filter !== "local" && !browser);
+  const loading = (!error && !downloadsOnly && !local) || (!localOnly && !browser);
   const pastFolders = historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path));
 
   function renderRecords(records: SearchRecord[], title: string) {
@@ -201,8 +223,18 @@ export default function App() {
         const status = recordStatus(record);
         const subtitle = record.type === "local" ? (record.file.currentPath || file.path)
           : (record.file.domain || file.path);
+        const needle = query.trim().toLowerCase();
+        const sourceMatched = record.type === "chrome" && needle.length > 0
+          && [record.file.domain, record.file.sourceTitle].some((value) => value.toLowerCase().includes(needle));
         return <button type="button" className="result-row" key={key} aria-expanded={selected === key}
           aria-controls={selected === key ? "file-details" : undefined}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+            event.preventDefault();
+            const rows = Array.from(resultPane.current?.querySelectorAll<HTMLButtonElement>(".result-row") ?? []);
+            const next = rows[rows.indexOf(event.currentTarget) + (event.key === "ArrowDown" ? 1 : -1)];
+            (next ?? searchInput.current)?.focus();
+          }}
           onClick={(event) => {
             selectedButton.current = event.currentTarget;
             setSelected(selected === key ? null : key);
@@ -211,9 +243,12 @@ export default function App() {
           <FileTile name={file.name} />
           <span className="result-copy"><strong>{file.name}</strong>
             <span title={subtitle}>{subtitle}</span>
-            {record.type === "local" && record.file.textMatched === 1 && <small>正文匹配</small>}
+            {record.type === "local" && (semanticMode || record.file.textMatched === 1) &&
+              <small>{semanticMode ? "语义匹配" : "正文匹配"}</small>}
+            {record.type === "local" && !semanticMode && record.file.annotationMatched === 1 && <small>备注或标签匹配</small>}
+            {sourceMatched && <small>来源匹配</small>}
           </span>
-          <span className={`badge ${status.tone}`}>{status.label}</span>
+          <span className={`badge ${status.tone}`}>{record.type === "local" && record.file.favorite === 1 ? "★ " : ""}{status.label}</span>
         </button>;
       })}
     </section>;
@@ -228,33 +263,68 @@ export default function App() {
       <nav className="app-nav" aria-label="主要功能">
         <button aria-pressed={view === "files"} onClick={() => setView("files")}>搜索文件</button>
         <button aria-pressed={view === "folders"} onClick={() => { setSelected(null); setView("folders"); }}>授权目录</button>
+        <HotkeySettings />
         <ChromeConnection refresh={refreshDownloads} />
       </nav>
       {view === "files" ? <div className={`search-layout ${selectedRecord ? "with-details" : ""}`}>
-        <section className="search-content" aria-labelledby="search-heading">
+        <section ref={resultPane} className="search-content" aria-labelledby="search-heading">
           <h1 id="search-heading">搜索文件</h1>
+          <div className="search-modes" role="group" aria-label="搜索方式">
+            <button type="button" className="secondary" aria-pressed={!semanticMode}
+              onClick={() => { setSelected(null); setMode("literal"); }}>字面搜索</button>
+            <button type="button" className="secondary" aria-pressed={semanticMode}
+              onClick={() => { setSelected(null); setMode("semantic"); }}>本地 AI 搜索</button>
+          </div>
+          <form className="search-form" onSubmit={(event) => {
+            event.preventDefault();
+            if (semanticMode && semantic.model?.ready && textEnabled) void semantic.search(query);
+          }}>
           <label className="search-box">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
               <circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 4.4 4.4"/>
             </svg>
-            <input type="search" aria-label="搜索文件和来源"
-              placeholder={textEnabled ? "文件名、路径、正文或来源" : "文件名、路径或来源"}
-              value={query} onChange={(event) => setQuery(event.target.value)} />
+            <input type="search" ref={searchInput} aria-label="搜索文件和来源"
+              placeholder={semanticMode ? "用一句话描述你记得的内容" : textEnabled ? "文件名、路径、正文或来源" : "文件名、路径或来源"}
+              value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); }}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowDown") return;
+                const first = resultPane.current?.querySelector<HTMLButtonElement>(".result-row");
+                if (first) { event.preventDefault(); first.focus(); }
+              }} />
           </label>
-          <div className="filters" role="group" aria-label="筛选搜索结果">
-            {([["all", "全部"], ["local", "本地文件"], ["chrome", "浏览器下载"], ["missing", "已丢失"]] as const)
+          {semanticMode && <button disabled={semantic.searching || !semantic.model?.ready || !textEnabled || !query.trim()}>搜索</button>}
+          </form>
+          {semanticMode ? <div className="semantic-options">
+            {semantic.error && <p className="error" role="alert">{semantic.error}</p>}
+            {!textEnabled && <p>先在<button type="button" className="secondary" onClick={() => setView("folders")}>授权目录</button>开启正文索引。</p>}
+            {!semantic.model?.ready && <>
+              <p>首次需下载约 135 MB 模型。下载完成后可离线搜索。</p>
+              <button onClick={() => void semantic.install()} disabled={semantic.installing}>
+                {semantic.installing ? `正在下载 ${Math.floor(100 * (semantic.model?.downloaded ?? 0) / (semantic.model?.total || 1))}%` : "下载本地模型"}
+              </button>
+            </>}
+            {semantic.searching && <p role="status">{semantic.progress
+              ? `正在比较本地文档 ${semantic.progress.done}/${semantic.progress.total}`
+              : "正在准备本地语义索引…"}</p>}
+            {semanticResult && !semanticResult.files.length && <p role="status">{semanticResult.indexed
+              ? "未找到足够相关的文件。" : "暂无可用正文，请确认授权目录已完成索引。"}</p>}
+            {semanticResult?.truncated && <p className="muted">本次比较了最近索引的 500 份文件。</p>}
+          </div> : <div className="filters" role="group" aria-label="筛选搜索结果">
+            {([["all", "全部"], ["local", "本地文件"], ["chrome", "浏览器下载"], ["missing", "已丢失"], ["favorites", "收藏"],
+              ["trusted", "可信网页来源"], ["candidate", "网页来源待核对"]] as const)
               .map(([key, label]) => <button key={key} type="button" aria-pressed={filter === key}
                 onClick={() => { setFilter(key); setSelected(null); }}>{label}</button>)}
-          </div>
+          </div>}
           {error && <p className="error" role="alert">{error}</p>}
-          {browser?.error && filter !== "local" && <p className="error" role="alert">{browser.error}</p>}
-          {!hasResults && loading && <p className="empty" role="status">正在搜索…</p>}
-          {!hasResults && !loading && <p className="empty">{query.trim() || filter !== "all" ? "没有找到匹配的记录。" :
+          {!semanticMode && browser?.error && !localOnly && <p className="error" role="alert">{browser.error}</p>}
+          {!semanticMode && !hasResults && loading && <p className="empty" role="status">正在搜索…</p>}
+          {!semanticMode && !hasResults && !loading && <p className="empty">{query.trim() || filter !== "all" ? "没有找到匹配的记录。" :
             <>暂无文件记录。<button className="secondary" onClick={() => setView("folders")}>管理授权目录</button></>}</p>}
-          {renderRecords(localRecords, "本地文件")}
+          {renderRecords(localRecords, semanticMode ? "相近内容" : "本地文件")}
           {renderRecords(chromeRecords, "Chrome 下载")}
         </section>
-        {selectedRecord && <FileDetails record={selectedRecord} onClose={closeDetails} reveal={reveal} openSource={openSource} />}
+        {selectedRecord && <FileDetails key={recordKey(selectedRecord)} record={selectedRecord}
+          onClose={closeDetails} reveal={reveal} openSource={openSource} />}
       </div> : <section className="folders-view" aria-labelledby="folder-heading">
         <div className="heading-row"><h1 id="folder-heading">授权目录</h1>
           <div className="actions">
@@ -265,7 +335,7 @@ export default function App() {
         {textEnabled !== undefined && <label className="text-search-setting">
           <input type="checkbox" checked={textEnabled} disabled={changingText || busy}
             onChange={(event) => void changeText(event.target.checked)} />
-          <span>搜索文件正文<small>仅索引不超过 128 KiB 的 UTF-8 TXT 和 Markdown。关闭时清除本机正文索引。</small></span>
+          <span>搜索文件正文<small>支持 UTF-8 TXT、Markdown、带文字层的 PDF 和 .docx。关闭时清除本机正文索引。</small></span>
         </label>}
         {error && <p className="error" role="alert">{error}</p>}
         {busy && <p role="status" className="muted">正在处理索引…</p>}

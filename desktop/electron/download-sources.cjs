@@ -7,6 +7,12 @@ const { DatabaseSync } = require("node:sqlite");
 const trusted = new Set(["matched", "confirmed", "manual"]);
 const sourceStates = new Set([...trusted, "candidate", "unknown", "rejected"]);
 const algorithmStates = new Set(["matched", "candidate", "unknown"]);
+const sourceColumns = `id, path, name, started_at AS startedAt, source_status AS sourceStatus,
+  source_title AS sourceTitle, domain, source_url AS sourceUrl`;
+
+function publicRecord({ sourceUrl, ...record }) {
+  return { ...record, canOpenSource: trusted.has(record.sourceStatus) && Boolean(webUrl(sourceUrl)) };
+}
 
 function webUrl(value) {
   if (typeof value !== "string" || value.length > 4096) return null;
@@ -100,13 +106,23 @@ class DownloadSources {
   search(query) {
     const needle = typeof query === "string" ? query.trim().slice(0, 200).toLowerCase() : "";
     return this.db.prepare(`
-      SELECT id, path, name, started_at AS startedAt, source_status AS sourceStatus,
-             source_title AS sourceTitle, domain, source_url AS sourceUrl
+      SELECT ${sourceColumns}
       FROM browser_downloads WHERE instr(search_text, ?) > 0
       ORDER BY started_at DESC, id LIMIT 200
-    `).all(needle).map(({ sourceUrl, ...record }) => ({
-      ...record, canOpenSource: trusted.has(record.sourceStatus) && Boolean(webUrl(sourceUrl)),
-    }));
+    `).all(needle).map(publicRecord);
+  }
+
+  byId(id) {
+    const record = this.db.prepare(`SELECT ${sourceColumns} FROM browser_downloads WHERE id = ?`).get(id);
+    return record ? publicRecord(record) : null;
+  }
+
+  candidates(aliases) {
+    if (!aliases.length) return [];
+    const clauses = aliases.map(() => "(path = ? COLLATE NOCASE OR name = ? COLLATE NOCASE)");
+    return this.db.prepare(`SELECT ${sourceColumns} FROM browser_downloads WHERE ${clauses.join(" OR ")}
+      ORDER BY started_at DESC, id LIMIT 20`)
+      .all(...aliases.flatMap(({ path, name }) => [path, name])).map(publicRecord);
   }
 
   sourceToOpen(id) {
