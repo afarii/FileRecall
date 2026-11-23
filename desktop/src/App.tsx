@@ -10,7 +10,7 @@ import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } fro
 import logo from "../../filerecall.svg";
 
 export default function App() {
-  const [view, setView] = useState<"files" | "folders" | "ntfs">("files");
+  const [view, setView] = useState<"files" | "folders" | "ntfs" | "settings">("files");
   const [folders, setFolders] = useState<IndexedFolder[]>([]);
   const [historyFolders, setHistoryFolders] = useState<Array<{ path: string; count: number }>>([]);
   const [clearingFolder, setClearingFolder] = useState<string | null>(null);
@@ -285,7 +285,8 @@ export default function App() {
             {record.type === "local" && !semanticMode && record.file.annotationMatched === 1 && <small>备注或标签匹配</small>}
             {sourceMatched && <small>{record.type === "download" && record.file.manager === "aria2" ? "下载地址匹配" : "来源匹配"}</small>}
           </span>
-          <span className={`badge ${status.tone}`}>{record.type === "local" && record.file.favorite === 1 ? "★ " : ""}{status.label}</span>
+          {(record.type === "download" || (record.type === "local" && (record.file.status !== "present" || Boolean(record.file.currentPath) || record.file.favorite === 1))) &&
+            <span className={`badge ${status.tone}`}>{record.type === "local" && record.file.favorite === 1 ? "★ " : ""}{status.label}</span>}
         </button>;
       })}
       {records.length > 60 && !expandedResults &&
@@ -298,19 +299,26 @@ export default function App() {
   return <div className="app">
     <header className="app-bar">
       <span className="brand"><span className="brand-mark"><img src={logo} alt="" /></span>FileRecall</span>
-      <span className="muted">本地存储</span>
+      <nav className="app-actions" aria-label="主要功能">
+        <button type="button" aria-pressed={view === "files"} onClick={() => setView("files")}>搜索</button>
+        <button type="button" aria-pressed={view !== "files"} onClick={() => { setSelected(null); setView("settings"); }}>设置</button>
+      </nav>
     </header>
     <main>
-      <nav className="app-nav" aria-label="主要功能">
-        <button aria-pressed={view === "files"} onClick={() => setView("files")}>搜索文件</button>
-        <button aria-pressed={view === "folders"} onClick={() => { setSelected(null); setView("folders"); }}>授权目录</button>
-        <button aria-pressed={view === "ntfs"} onClick={() => { setSelected(null); setView("ntfs"); }}>磁盘索引</button>
-        <HotkeySettings />
-        <ChromeConnection refresh={refreshDownloads} />
-        <Aria2Connection />
-        <DesktopUpdates />
-      </nav>
-      {view === "ntfs" ? <NtfsPanel /> : view === "files" ? <div className={`search-layout ${selectedRecord ? "with-details" : ""}`}>
+      {view === "settings" ? <section className="folders-view settings-view" aria-label="设置">
+        <h1>设置</h1>
+        <p className="muted">索引和连接在后台运行，需要时再调整。</p>
+        <div className="settings-links">
+          <button type="button" className="secondary" onClick={() => setView("folders")}>授权目录与正文搜索</button>
+          <button type="button" className="secondary" onClick={() => setView("ntfs")}>磁盘索引管理</button>
+        </div>
+        <div className="settings-tools">
+          <HotkeySettings />
+          <ChromeConnection refresh={refreshDownloads} />
+          <Aria2Connection />
+          <DesktopUpdates />
+        </div>
+      </section> : view === "ntfs" ? <NtfsPanel /> : view === "files" ? <div className={`search-layout ${selectedRecord ? "with-details" : ""}`}>
         <section ref={resultPane} className="search-content" aria-labelledby="search-heading">
           <h1 id="search-heading">搜索文件</h1>
           <div className="search-modes" role="group" aria-label="搜索方式">
@@ -354,10 +362,15 @@ export default function App() {
               ? "未找到足够相关的文件。" : "暂无可用正文，请确认授权目录已完成索引。"}</p>}
             {semanticResult?.truncated && <p className="muted">本次比较了最近索引的 500 份文件。</p>}
           </div> : <div className="filters" role="group" aria-label="筛选搜索结果">
-            {([["all", "全部"], ["local", "本地文件"], ["chrome", "Chrome 下载"], ["aria2", "Motrix／aria2"], ["missing", "已丢失"], ["favorites", "收藏"],
-              ["trusted", "可信网页来源"], ["candidate", "网页来源待核对"]] as const)
+            {([["all", "全部"], ["local", "本地文件"], ["favorites", "收藏"], ["missing", "已丢失"],
+              ["chrome", "Chrome"], ["aria2", "Motrix"]] as const)
               .map(([key, label]) => <button key={key} type="button" aria-pressed={filter === key}
                 onClick={() => { setFilter(key); setSelected(null); }}>{label}</button>)}
+            <details className="filter-more">
+              <summary>更多筛选</summary>
+              <button type="button" aria-pressed={filter === "trusted"} onClick={() => setFilter("trusted")}>可信网页来源</button>
+              <button type="button" aria-pressed={filter === "candidate"} onClick={() => setFilter("candidate")}>来源待核对</button>
+            </details>
           </div>}
           {error && <p className="error" role="alert">{error}</p>}
           {!semanticMode && browser?.error && !localOnly && <p className="error" role="alert">{browser.error}</p>}
