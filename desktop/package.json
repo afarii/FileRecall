@@ -1,7 +1,7 @@
 {
   "name": "filerecall-desktop",
   "private": true,
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "FileRecall local file and download history",
   "author": "FileRecall contributors",
   "type": "module",
