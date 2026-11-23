@@ -257,7 +257,7 @@ class FileIndex {
       }
       if (covered) continue;
       const target = await changedTarget(folder, realRoot, path);
-      const scope = await this.scanScope(context, target.path, target.info);
+      const scope = await this.scanScope(context, target.path, target.info, true);
       changed += scope.changed;
       complete &&= scope.complete;
       if (process.platform === "win32" && scope.complete &&
@@ -282,7 +282,7 @@ class FileIndex {
     return { folder, identity, realRoot, textRoot: this.textEnabled() ? realRoot : null, nested };
   }
 
-  async scanScope({ folder, identity, textRoot, nested }, path, target) {
+  async scanScope({ folder, identity, textRoot, nested }, path, target, forceMotw = false) {
     const token = randomUUID();
     const now = Date.now();
     const lookupText = this.db.prepare("SELECT signature FROM file_text WHERE path = ?");
@@ -345,7 +345,7 @@ class FileIndex {
       // Authorized directory indexing caches bounded source evidence once per file version.
       if (identity && cachedMotw && saveMotw) {
         const fingerprint = [info.size, info.mtimeNs].join(":");
-        if (cachedMotw.get(identity)?.signature !== fingerprint) {
+        if (cachedMotw.get(identity)?.signature !== fingerprint || (forceMotw && target?.isFile())) {
           const evidence = await this.motwReader(full).catch(() => null);
           const latest = await fs.lstat(full, { bigint: true }).catch(() => null);
           if (latest && fileIdentity(latest) === identity && latest.mtimeNs === info.mtimeNs) {
