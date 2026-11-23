@@ -384,7 +384,7 @@ export default function App() {
             </svg>
             <input type="search" ref={searchInput} aria-label="搜索文件和来源"
               placeholder={semanticMode ? "用一句话描述你记得的内容" : "文件名、全拼、首字母、扩展名组合或来源，例如 pdf sybg"}
-              value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); setExpandedResults(false); }}
+              value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); setExpandedResults(false); setError(""); }}
               onKeyDown={(event) => {
                 if (event.key !== "ArrowDown") return;
                 const first = resultPane.current?.querySelector<HTMLButtonElement>(".result-row");
