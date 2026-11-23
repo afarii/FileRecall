@@ -236,7 +236,10 @@ class NtfsSearch {
         this.sessions.set(drive, { phase: "building", message: "正在扫描 MFT 文件记录…" });
         this.notify();
       }
-      let position = this.catalog.beginBuild(drive, info.journal);
+      let position = this.catalog.beginBuild(drive, info.journal, info.next);
+      // Replay USN changes from the beginning of the snapshot, not its end.
+      // Otherwise changes occurring while the MFT is scanned could be lost.
+      const initialUsn = this.catalog.drives().find((entry) => entry.drive === drive)?.build_usn ?? info.next;
       let processed = wasBuilding ? (live.processed ?? 0) : 0;
       let finished = false;
       // Never monopolize the single NTFS helper for an entire volume.
@@ -244,7 +247,7 @@ class NtfsSearch {
         const batch = await this.reader.request("enum", drive, info.volume, info.journal, position);
         if (batch.end) {
           this.catalog.finishBuild(drive);
-          cursor = info.next;
+          cursor = initialUsn;
           this.catalog.checkpoint(drive, info.journal, cursor);
           finished = true;
           break;
