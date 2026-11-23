@@ -1,0 +1,38 @@
+name: Publish v0.4.7 desktop preview (one-time)
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-preview-v047-once.yml
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: FileRecall-Windows-x64
+          run-id: 45165075605
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: installer
+      - name: Verify and upload preview installer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test -s installer/FileRecall-Setup-0.4.7-x64.exe
+          test -s installer/FileRecall-Setup-0.4.7-x64.exe.blockmap
+          test -s installer/latest.yml
+          grep -F 'FileRecall-Setup-0.4.7-x64.exe' installer/latest.yml
+          gh release upload desktop-preview \
+            installer/FileRecall-Setup-0.4.7-x64.exe \
+            installer/FileRecall-Setup-0.4.7-x64.exe.blockmap \
+            installer/latest.yml --clobber
+          gh release view desktop-preview --json assets --jq '.assets[].name'
