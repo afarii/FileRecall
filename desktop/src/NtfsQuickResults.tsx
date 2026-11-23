@@ -13,14 +13,20 @@ export default function NtfsQuickResults({ query, enabled, existingPaths, onCoun
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = window.fileRecall.onNtfsChanged((value) => {
       setStatus(value);
-      setRevision((prior) => prior + 1);
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => setRevision((prior) => prior + 1), 600);
     });
     void window.fileRecall.ntfsStatus().then((value) => {
       if (active) { setStatus(value); setRevision((prior) => prior + 1); }
     }).catch(() => {});
-    return () => { active = false; unsubscribe(); };
+    return () => {
+      active = false;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+      unsubscribe();
+    };
   }, []);
   useEffect(() => {
     let active = true;
@@ -32,7 +38,7 @@ export default function NtfsQuickResults({ query, enabled, existingPaths, onCoun
       void window.fileRecall.searchNtfs(query).then((files) => {
         if (active) setResult({ query, files });
       }).catch(() => { if (active) setResult({ query, files: [] }); });
-    }, 150);
+    }, 70);
     return () => { active = false; window.clearTimeout(timer); };
   }, [query, enabled, revision]);
   const local = new Set(existingPaths.map((path) => path.toLowerCase()));
