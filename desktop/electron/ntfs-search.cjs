@@ -54,13 +54,14 @@ class NtfsSearch {
   }
 
   status() {
+    const excluded = new Set(this.catalog.excluded());
     return {
       available: true,
       autoPhase: this.autoPhase,
       autoMessage: this.autoMessage,
       connected: Boolean(this.reader && !this.reader.closed),
       drives: this.catalog.drives().map(({ drive, cursor, build_position }) => ({
-        drive, ...(this.catalog.excluded().includes(drive)
+        drive, ...(excluded.has(drive)
           ? { phase: "paused", message: "已暂停，原有索引保留在本机" }
           : this.sessions.get(drive) ?? (build_position !== null
             ? { phase: "cached", message: "从上次进度继续建立索引" }
