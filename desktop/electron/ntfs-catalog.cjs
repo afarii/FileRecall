@@ -2,6 +2,7 @@
 
 const { DatabaseSync } = require("node:sqlite");
 const { win32 } = require("node:path");
+const { nameSearchKeys, queryTerms } = require("./filename-search.cjs");
 
 const DIRECTORY = 0x10;
 const DELETE = 0x200;
@@ -37,6 +38,11 @@ class NtfsCatalog {
       CREATE INDEX IF NOT EXISTS ntfs_item_name ON ntfs_item (drive, folded);
       CREATE INDEX IF NOT EXISTS ntfs_item_parent ON ntfs_item (drive, parent);
     `);
+    const columns = new Set(this.db.prepare("PRAGMA table_info(ntfs_item)").all().map((entry) => entry.name));
+    if (!columns.has("pinyin")) this.db.exec("ALTER TABLE ntfs_item ADD COLUMN pinyin TEXT");
+    if (!columns.has("initials")) this.db.exec("ALTER TABLE ntfs_item ADD COLUMN initials TEXT");
+    this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_item_pinyin ON ntfs_item(drive, pinyin)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_item_initials ON ntfs_item(drive, initials)");
   }
 
   transaction(action) {
@@ -124,11 +130,14 @@ class NtfsCatalog {
         WHERE ntfs_parent.path <> excluded.path
       `);
       const saveItem = this.db.prepare(`
-        INSERT INTO ntfs_item VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO ntfs_item(drive, id, parent, name, folded, directory, pinyin, initials)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (drive, id) DO UPDATE SET parent = excluded.parent, name = excluded.name,
-          folded = excluded.folded, directory = excluded.directory
+          folded = excluded.folded, directory = excluded.directory,
+          pinyin = excluded.pinyin, initials = excluded.initials
         WHERE ntfs_item.parent <> excluded.parent OR ntfs_item.name <> excluded.name
-          OR ntfs_item.directory <> excluded.directory
+          OR ntfs_item.directory <> excluded.directory OR ntfs_item.pinyin IS NOT excluded.pinyin
+          OR ntfs_item.initials IS NOT excluded.initials
       `);
       const removeItem = this.db.prepare("DELETE FROM ntfs_item WHERE drive = ? AND id = ?");
       let changed = false;
@@ -145,7 +154,9 @@ class NtfsCatalog {
         if (old?.isDirectory && fullPath(old) !== fullPath(row)) this.updateSubtree(drive, fullPath(old), fullPath(row));
         const parent = win32.normalize(row.directory);
         const parentChanged = saveParent.run(drive, row.parent, parent, parent.toLowerCase()).changes;
-        const itemChanged = saveItem.run(drive, row.id, row.parent, row.name, row.name.toLowerCase(), Number(directory)).changes;
+        const keys = nameSearchKeys(row.name);
+        const itemChanged = saveItem.run(drive, row.id, row.parent, row.name, row.name.toLowerCase(),
+          Number(directory), keys.pinyin, keys.initials).changes;
         changed = Boolean(parentChanged || itemChanged) || changed;
       }
       if (changed && !snapshot) this.checkpoint(drive, journal, cursor);
@@ -185,38 +196,57 @@ class NtfsCatalog {
     }
   }
 
+  backfillSearchKeys(limit = 300) {
+    const rows = this.db.prepare(
+      "SELECT drive, id, name FROM ntfs_item WHERE pinyin IS NULL OR initials IS NULL LIMIT ?"
+    ).all(limit);
+    if (!rows.length) return 0;
+    this.transaction(() => {
+      const update = this.db.prepare(
+        "UPDATE ntfs_item SET pinyin = ?, initials = ? WHERE drive = ? AND id = ?"
+      );
+      for (const row of rows) {
+        const keys = nameSearchKeys(row.name);
+        update.run(keys.pinyin, keys.initials, row.drive, row.id);
+      }
+    });
+    return rows.length;
+  }
+
   search(drive, query) {
-    const text = query.toLowerCase().trim();
-    if (!text) return [];
-    const needle = text.split(/[/\\]/).at(-1);
-    if (!needle) return [];
-    const upper = needle + "\uffff";
-    const pathQuery = /[/\\]/.test(text) ? 1 : 0;
-    const normalized = text.replaceAll("/", "\\");
-    if (needle.length < 2) {
-      return this.db.prepare(`
-        SELECT i.id, i.name, p.path AS directory, i.directory AS isDirectory
-        FROM ntfs_item i JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
-        WHERE i.drive = ? AND i.folded >= ? AND i.folded < ? LIMIT 100
-      `).all(drive, needle, upper);
+    const terms = queryTerms(query);
+    if (!terms.length) return [];
+    const primary = [...terms].sort((a, b) => b.length - a.length)[0];
+    const upper = primary + "\uffff";
+    const filter = terms.map(() => "(" +
+      "instr(i.folded, ?) > 0 OR instr(coalesce(i.pinyin, ''), ?) > 0 OR " +
+      "instr(coalesce(i.initials, ''), ?) > 0 OR " +
+      "instr(p.folded || char(92) || i.folded, ?) > 0)").join(" AND ");
+    const args = terms.flatMap((term) => [term, term, term, term.replaceAll("/", "\\")]);
+    const columns = "SELECT i.id, i.name, p.path AS directory, i.directory AS isDirectory";
+    const from = "FROM ntfs_item i JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent";
+    // Use indexed prefix ranges first, then retain infix matches for broader queries.
+    const prefixSql = columns + " " + from +
+      " WHERE i.drive = ? AND ((i.folded >= ? AND i.folded < ?) " +
+      "OR (i.pinyin >= ? AND i.pinyin < ?) OR (i.initials >= ? AND i.initials < ?)) " +
+      "AND " + filter +
+      " ORDER BY CASE WHEN i.folded = ? THEN 0 WHEN i.folded >= ? AND i.folded < ? THEN 1 " +
+      "WHEN i.pinyin >= ? AND i.pinyin < ? THEN 2 ELSE 3 END, length(i.name), i.folded LIMIT 100";
+    const matches = this.db.prepare(prefixSql).all(drive,
+      primary, upper, primary, upper, primary, upper, ...args,
+      primary, primary, upper, primary, upper);
+    if (matches.length >= 100) return matches;
+    const seen = new Set(matches.map((entry) => entry.id));
+    const infix = this.db.prepare(columns + " " + from +
+      " WHERE i.drive = ? AND " + filter + " LIMIT 200").all(drive, ...args);
+    for (const entry of infix) {
+      if (!seen.has(entry.id)) {
+        seen.add(entry.id);
+        matches.push(entry);
+        if (matches.length >= 100) break;
+      }
     }
-    // Common prefix matches use ntfs_item_name's B-tree index before a general substring scan.
-    const prefixMatches = this.db.prepare(`
-      SELECT i.id, i.name, p.path AS directory, i.directory AS isDirectory
-      FROM ntfs_item i JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
-      WHERE i.drive = ? AND i.folded >= ? AND i.folded < ?
-      AND (? = 0 OR instr(rtrim(p.folded, '\\') || '\\' || i.folded, ?) > 0) LIMIT 100
-    `).all(drive, needle, upper, pathQuery, normalized);
-    if (prefixMatches.length >= 100) return prefixMatches;
-    const remaining = this.db.prepare(`
-      SELECT i.id, i.name, p.path AS directory, i.directory AS isDirectory
-      FROM ntfs_item i JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
-      WHERE i.drive = ? AND instr(i.folded, ?) > 0
-      AND (i.folded < ? OR i.folded >= ?)
-      AND (? = 0 OR instr(rtrim(p.folded, '\\') || '\\' || i.folded, ?) > 0)
-      LIMIT ?
-    `).all(drive, needle, needle, upper, pathQuery, normalized, 100 - prefixMatches.length);
-    return [...prefixMatches, ...remaining];
+    return matches;
   }
 
   close() { this.db.close(); }
