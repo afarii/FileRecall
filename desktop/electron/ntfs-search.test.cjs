@@ -84,7 +84,9 @@ test("NTFS resumes changes, moves directory descendants and rebuilds if the jour
   assert.equal(service.status().drives[0].phase, "error");
   assert.deepEqual(service.search("listing"), []);
   await service.disable("E");
-  assert.deepEqual(service.status().drives, []);
+  assert.equal(service.status().drives[0].phase, "paused");
+  assert.deepEqual(service.search("listing"), []);
+  assert.ok(service.catalog.drives()[0].cursor, "pausing retains the on-disk cursor");
   assert.equal(reader.closed, true);
 });
 
@@ -123,4 +125,62 @@ test("cached NTFS names remain searchable before UAC reconnect, while live file 
   assert.equal(result.cached, true);
   assert.equal(result.path, "D:\\Synthetic\\sample-report.txt");
   assert.equal(offline.target("D", "101"), null);
+});
+
+test("persisted MFT snapshot is searchable on restart and avoids a full enumeration", async (t) => {
+  const { mkdtemp, rm } = require("node:fs/promises");
+  const { tmpdir } = require("node:os");
+  const { join } = require("node:path");
+  const home = await mkdtemp(join(tmpdir(), "filerecall-reuse-test-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const database = join(home, "ntfs-index.sqlite");
+  const calls = [];
+  const makeReader = () => ({
+    closed: false,
+    close() { this.closed = true; },
+    async request(type, _drive, _volume, _journal, cursor) {
+      calls.push(type);
+      if (type === "probe") return { volume: testVolume, journal: "100", first: "3", next: "20" };
+      if (type === "enum") {
+        if (cursor === "0") return { next: "10", rows: [
+          row("101", "5", "E:\\\\", "实验报告.pdf"),
+        ] };
+        return { end: true };
+      }
+      return { next: "20", rows: [] };
+    },
+  });
+  const options = {
+    createReader: async () => makeReader(), onChange() {},
+    onPaths: async () => {}, onActiveDrives() {},
+  };
+  const first = new NtfsSearch(database, "E:\\\\AppData", "", options);
+  await first.enable("E");
+  await first.tail;
+  assert.equal(first.status().drives[0].phase, "ready");
+  assert.equal(first.search("sy")[0].name, "实验报告.pdf");
+  await first.close();
+
+  calls.length = 0;
+  const reopened = new NtfsSearch(database, "E:\\\\AppData", "", options);
+  t.after(() => reopened.close());
+  assert.equal(reopened.status().drives[0].phase, "cached");
+  assert.equal(reopened.search("sy")[0].cached, true);
+  // Simulate UAC reconnect occurring before journal validation completes:
+  // the persisted cache must still appear in live search.
+  reopened.reader = makeReader();
+  assert.equal(reopened.searchableDrives()[0].cached, true);
+  reopened.reader = undefined;
+  await reopened.enable("E");
+  await reopened.tail;
+  assert.equal(reopened.status().drives[0].phase, "ready");
+  assert.equal(reopened.search("sy")[0].cached, false);
+  assert.ok(!calls.includes("enum"), "reinstall/restart must replay USN without rescanning MFT");
+
+  await reopened.disable("E");
+  assert.equal(reopened.status().drives[0].phase, "paused");
+  assert.equal(reopened.search("sy").length, 0);
+  await reopened.enable("E");
+  await reopened.tail;
+  assert.equal(reopened.search("sy")[0].name, "实验报告.pdf");
 });
