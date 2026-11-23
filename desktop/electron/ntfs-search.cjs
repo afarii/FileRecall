@@ -33,6 +33,24 @@ class NtfsSearch {
     this.tail = Promise.resolve();
     this.interval = setInterval(() => this.schedulePoll(), 3000);
     this.interval.unref();
+    // Migrate existing SQLite indexes in small batches to keep the window responsive.
+    let round = 0;
+    this.searchKeyTimer = setInterval(() => {
+      if (this.closed) return;
+      try {
+        const updated = this.catalog.backfillSearchKeys(200);
+        if (!updated) {
+          clearInterval(this.searchKeyTimer);
+          this.searchKeyTimer = undefined;
+        } else if (++round % 10 === 0) {
+          this.onChange(this.status());
+        }
+      } catch {
+        clearInterval(this.searchKeyTimer);
+        this.searchKeyTimer = undefined;
+      }
+    }, 80);
+    this.searchKeyTimer.unref();
   }
 
   status() {
@@ -273,6 +291,7 @@ class NtfsSearch {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.interval);
+    clearInterval(this.searchKeyTimer);
     this.connecting?.abort();
     this.reader?.close();
     await this.tail;
