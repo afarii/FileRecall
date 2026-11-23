@@ -144,12 +144,32 @@ class NtfsCatalog {
     `).run(journal, cursor, drive);
   }
 
+  // Resolve an unfinished MFT snapshot on demand. Most directory records
+  // precede their children, so searches become useful before scanning finishes.
+  resolveParent(drive, id) {
+    const find = this.db.prepare("SELECT parent, name, directory FROM ntfs_item WHERE drive = ? AND id = ?");
+    const names = [];
+    const seen = new Set();
+    while (!isRootId(id)) {
+      if (seen.has(id) || names.length >= 256) return null;
+      seen.add(id);
+      const item = find.get(drive, id);
+      if (!item || !item.directory) return null;
+      names.push(item.name);
+      id = item.parent;
+    }
+    return win32.join(drive + ":\\", ...names.reverse());
+  }
+
   item(drive, id) {
-    return this.db.prepare(`
-      SELECT i.name, p.path AS directory, i.directory AS isDirectory
-      FROM ntfs_item i JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
+    const row = this.db.prepare(`
+      SELECT i.name, i.parent, p.path AS directory, i.directory AS isDirectory
+      FROM ntfs_item i LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
       WHERE i.drive = ? AND i.id = ?
     `).get(drive, id);
+    if (!row) return null;
+    row.directory ??= this.resolveParent(drive, row.parent);
+    return row.directory ? row : null;
   }
 
   visible(drive, row) {
@@ -283,8 +303,8 @@ class NtfsCatalog {
     if (!terms.length) return [];
     const primary = [...terms].sort((a, b) => b.length - a.length)[0];
     const upper = primary + "\uffff";
-    const columns = "SELECT i.id, i.name, p.path AS directory, i.directory AS isDirectory";
-    const from = "FROM ntfs_item i JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent";
+    const columns = "SELECT i.id, i.parent, i.name, p.path AS directory, i.directory AS isDirectory";
+    const from = "FROM ntfs_item i LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent";
 
     function filters(words) {
       const clauses = [];
@@ -309,9 +329,11 @@ class NtfsCatalog {
     const results = [];
     const seen = new Set();
     const applicationData = this.applicationData;
+    const resolveParent = (parent) => this.resolveParent(drive, parent);
     function collect(rows) {
       for (const row of rows) {
         if (seen.has(row.id)) continue;
+        row.directory ??= resolveParent(row.parent);
         const path = fullPath(row)?.toLowerCase();
         if (!path || path === applicationData || below(path, applicationData)) continue;
         seen.add(row.id);
