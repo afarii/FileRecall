@@ -4,60 +4,73 @@ const { Worker } = require("node:worker_threads");
 const { join } = require("node:path");
 
 function createSearchService({ localDatabase, ntfsDatabase, applicationData }) {
-  const worker = new Worker(join(__dirname, "search-worker.cjs"), {
-    workerData: { localDatabase, ntfsDatabase, applicationData },
-  });
-  worker.unref();
-  const requests = new Map();
-  let nextId = 0;
-  let stopped = false;
-
-  function fail(error) {
-    if (stopped) return;
-    stopped = true;
-    for (const { reject, timer } of requests.values()) {
-      clearTimeout(timer);
-      reject(error);
-    }
-    requests.clear();
-  }
-  worker.on("message", (reply) => {
-    const pending = requests.get(reply.id);
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    requests.delete(reply.id);
-    if (requests.size === 0) worker.unref();
-    if (reply.error) pending.reject(new Error(reply.error));
-    else pending.resolve(reply.files);
-  });
-  worker.on("error", fail);
-  worker.on("exit", (code) => fail(new Error("搜索工作线程已退出（" + code + "）")));
-
-  function request(kind, query, drives = []) {
-    if (stopped) return Promise.reject(new Error("搜索服务已停止"));
-    const id = ++nextId;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        requests.delete(id);
-        if (requests.size === 0) worker.unref();
-        reject(new Error("搜索超时，请缩小查询范围"));
-      }, 8000);
-      timer.unref();
-      requests.set(id, { resolve, reject, timer });
-      worker.ref();
-      worker.postMessage({ id, kind, query, drives });
+  const createChannel = (searchKind) => {
+    const worker = new Worker(join(__dirname, "search-worker.cjs"), {
+      workerData: { localDatabase, ntfsDatabase, applicationData },
     });
-  }
-  return {
-    searchLocal: (query) => request("local", query),
-    searchNtfs: (query, drives) => request("ntfs", query, drives),
-    async close() {
-      if (!stopped) {
-        try { await request("shutdown", ""); } catch { /* Worker may already have exited. */ }
-        fail(new Error("搜索服务正在关闭"));
+    worker.unref();
+    const pending = new Map();
+    let sequence = 0;
+    let stopped = false;
+
+    function fail(error) {
+      if (stopped) return;
+      stopped = true;
+      for (const { reject, timer } of pending.values()) {
+        clearTimeout(timer);
+        reject(error);
       }
-      await worker.terminate();
-    },
+      pending.clear();
+      worker.unref();
+    }
+
+    worker.on("message", (reply) => {
+      const item = pending.get(reply.id);
+      if (!item) return;
+      clearTimeout(item.timer);
+      pending.delete(reply.id);
+      if (!pending.size) worker.unref();
+      if (reply.error) item.reject(new Error(reply.error));
+      else item.resolve(reply.files);
+    });
+    worker.on("error", fail);
+    worker.on("exit", (code) => fail(new Error("搜索线程已退出：" + code)));
+
+    function request(query, drives = [], kind = searchKind) {
+      if (stopped) return Promise.reject(new Error("搜索服务已停止"));
+      const id = ++sequence;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          if (!pending.size) worker.unref();
+          reject(new Error("搜索超时，请缩小查询范围"));
+        }, 8000);
+        timer.unref();
+        pending.set(id, { resolve, reject, timer });
+        worker.ref();
+        worker.postMessage({ id, kind, query, drives });
+      });
+    }
+
+    return {
+      request,
+      async close() {
+        if (!stopped) {
+          try { await request("", [], "shutdown"); } catch {}
+          fail(new Error("搜索服务正在关闭"));
+        }
+        await worker.terminate();
+      },
+    };
+  };
+
+  // One slow authorized-folder SQL query must not delay MFT filename results.
+  const local = createChannel("local");
+  const ntfs = createChannel("ntfs");
+  return {
+    searchLocal: (query) => local.request(query),
+    searchNtfs: (query, drives) => ntfs.request(query, drives),
+    async close() { await Promise.all([local.close(), ntfs.close()]); },
   };
 }
 
