@@ -218,35 +218,60 @@ class NtfsCatalog {
     if (!terms.length) return [];
     const primary = [...terms].sort((a, b) => b.length - a.length)[0];
     const upper = primary + "\uffff";
-    const filter = terms.map(() => "(" +
-      "instr(i.folded, ?) > 0 OR instr(coalesce(i.pinyin, ''), ?) > 0 OR " +
-      "instr(coalesce(i.initials, ''), ?) > 0 OR " +
-      "instr(rtrim(p.folded, char(92)) || char(92) || i.folded, ?) > 0)").join(" AND ");
-    const args = terms.flatMap((term) => [term, term, term, term.replaceAll("/", "\\")]);
     const columns = "SELECT i.id, i.name, p.path AS directory, i.directory AS isDirectory";
     const from = "FROM ntfs_item i JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent";
-    // Use indexed prefix ranges first, then retain infix matches for broader queries.
-    const prefixSql = columns + " " + from +
-      " WHERE i.drive = ? AND ((i.folded >= ? AND i.folded < ?) " +
-      "OR (i.pinyin >= ? AND i.pinyin < ?) OR (i.initials >= ? AND i.initials < ?)) " +
-      "AND " + filter +
-      " ORDER BY CASE WHEN i.folded = ? THEN 0 WHEN i.folded >= ? AND i.folded < ? THEN 1 " +
-      "WHEN i.pinyin >= ? AND i.pinyin < ? THEN 2 ELSE 3 END, length(i.name), i.folded LIMIT 100";
-    const matches = this.db.prepare(prefixSql).all(drive,
-      primary, upper, primary, upper, primary, upper, ...args,
-      primary, primary, upper, primary, upper);
-    if (matches.length >= 100) return matches;
-    const seen = new Set(matches.map((entry) => entry.id));
-    const infix = this.db.prepare(columns + " " + from +
-      " WHERE i.drive = ? AND " + filter + " LIMIT 200").all(drive, ...args);
-    for (const entry of infix) {
-      if (!seen.has(entry.id)) {
-        seen.add(entry.id);
-        matches.push(entry);
-        if (matches.length >= 100) break;
+
+    function filters(words) {
+      const clauses = [];
+      const args = [];
+      for (const term of words) {
+        if (term.includes("/") || term.includes("\\")) {
+          clauses.push("instr(rtrim(p.folded, char(92)) || char(92) || i.folded, ?) > 0");
+          args.push(term.replaceAll("/", "\\"));
+        } else if (!/^[a-z0-9]+$/u.test(term)) {
+          // Han characters or punctuation can only appear in the literal filename.
+          clauses.push("instr(i.folded, ?) > 0");
+          args.push(term);
+        } else {
+          clauses.push("(instr(i.folded, ?) > 0 OR instr(i.pinyin, ?) > 0 OR instr(i.initials, ?) > 0)");
+          args.push(term, term, term);
+        }
+      }
+      return { where: clauses.join(" AND ") || "1", args };
+    }
+
+    const others = filters(terms.filter((term) => term !== primary));
+    const results = [];
+    const seen = new Set();
+    function collect(rows) {
+      for (const row of rows) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        results.push(row);
+        if (results.length === 100) break;
       }
     }
-    return matches;
+
+    // Separate indexed range scans avoid sorting huge sets when the prefix is common.
+    const columnsToTry = /^[a-z0-9]+$/u.test(primary)
+      ? ["i.folded", "i.pinyin", "i.initials"] : ["i.folded"];
+    for (const column of columnsToTry) {
+      if (results.length >= 100) break;
+      const sql = columns + " " + from + " WHERE i.drive = ? AND " +
+        column + " >= ? AND " + column + " < ? AND " + others.where +
+        " LIMIT ?";
+      const matches = this.db.prepare(sql).all(drive, primary, upper,
+        ...others.args, 100 - results.length);
+      collect(matches);
+    }
+    if (results.length >= 100) return results;
+
+    // Preserve substring searches; normal filename queries avoid parent-path checks.
+    const all = filters(terms);
+    const infix = this.db.prepare(columns + " " + from +
+      " WHERE i.drive = ? AND " + all.where + " LIMIT 200").all(drive, ...all.args);
+    collect(infix);
+    return results;
   }
 
   close() { this.db.close(); }
