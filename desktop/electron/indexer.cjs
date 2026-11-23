@@ -5,6 +5,7 @@ const fs = require("node:fs/promises");
 const { basename, dirname, isAbsolute, join, relative, resolve, sep } = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 const { canIndexText, textSignature, readText } = require("./text-content.cjs");
+const { readMotw } = require("./motw.cjs");
 
 function fileIdentity(info) {
   if (!info.isFile() || info.nlink !== 1n || info.dev <= 0n || info.ino <= 0n || info.birthtimeNs <= 0n) return null;
@@ -67,7 +68,9 @@ const POSSIBLE_PATH = `
 `;
 
 class FileIndex {
-  constructor(databasePath) {
+  constructor(databasePath, { motwReader = readMotw, trackMotw = process.platform === "win32" } = {}) {
+    this.motwReader = motwReader;
+    this.trackMotw = trackMotw;
     this.databasePath = resolve(databasePath);
     this.db = new DatabaseSync(databasePath);
     this.db.exec(`
@@ -113,6 +116,15 @@ class FileIndex {
         note TEXT NOT NULL,
         tags TEXT NOT NULL,
         search_text TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS file_motw (
+        file_identity TEXT PRIMARY KEY,
+        signature TEXT NOT NULL,
+        zone_id INTEGER,
+        host_url TEXT,
+        referrer_url TEXT,
+        observed_at INTEGER,
+        current_mark INTEGER NOT NULL DEFAULT 0
       );
     `);
     const columns = new Set(this.db.prepare("PRAGMA table_info(files)").all().map((column) => column.name));
@@ -202,6 +214,8 @@ class FileIndex {
         SELECT 1 FROM files WHERE files.file_identity = source_decisions.file_identity
       ); DELETE FROM file_annotations WHERE NOT EXISTS (
         SELECT 1 FROM files WHERE files.file_identity = file_annotations.file_identity
+      ); DELETE FROM file_motw WHERE NOT EXISTS (
+        SELECT 1 FROM files WHERE files.file_identity = file_motw.file_identity
       )`);
       this.db.exec("COMMIT");
       return Number(result.changes);
@@ -274,6 +288,18 @@ class FileIndex {
     const lookupText = this.db.prepare("SELECT signature FROM file_text WHERE path = ?");
     const saveText = this.db.prepare("INSERT OR REPLACE INTO file_text VALUES (?, ?, ?)");
     const deleteText = this.db.prepare("DELETE FROM file_text WHERE path = ?");
+    const cachedMotw = this.trackMotw
+      ? this.db.prepare("SELECT signature FROM file_motw WHERE file_identity = ?") : null;
+    const saveMotw = this.trackMotw ? this.db.prepare(`
+      INSERT INTO file_motw VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(file_identity) DO UPDATE SET
+        signature = excluded.signature,
+        zone_id = CASE WHEN excluded.current_mark = 1 THEN excluded.zone_id ELSE file_motw.zone_id END,
+        host_url = CASE WHEN excluded.current_mark = 1 THEN excluded.host_url ELSE file_motw.host_url END,
+        referrer_url = CASE WHEN excluded.current_mark = 1 THEN excluded.referrer_url ELSE file_motw.referrer_url END,
+        observed_at = CASE WHEN excluded.current_mark = 1 THEN excluded.observed_at ELSE file_motw.observed_at END,
+        current_mark = excluded.current_mark
+    `) : null;
     const upsert = this.db.prepare(`
       INSERT INTO files (path, root_path, name, size, modified_at, first_seen_at, last_seen_at, scan_token, status, file_identity)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present', ?)
@@ -312,9 +338,24 @@ class FileIndex {
         if (text !== undefined && cached) changed += Number(deleteText.run(full).changes);
       }
       const root = nested.find((candidate) => isWithin(candidate, full)) ?? folder;
+      const identity = fileIdentity(info);
       changed += Number(upsert.run(full, root, basename(full), Number(info.size), Number(info.mtimeNs) / 1e6,
-        now, now, token, fileIdentity(info)).changes);
+        now, now, token, identity).changes);
       if (typeof text === "string") changed += Number(saveText.run(full, signature, text).changes);
+      // Authorized directory indexing caches bounded source evidence once per file version.
+      if (identity && cachedMotw && saveMotw) {
+        const fingerprint = [info.size, info.mtimeNs].join(":");
+        if (cachedMotw.get(identity)?.signature !== fingerprint) {
+          const evidence = await this.motwReader(full).catch(() => null);
+          const latest = await fs.lstat(full, { bigint: true }).catch(() => null);
+          if (latest && fileIdentity(latest) === identity && latest.mtimeNs === info.mtimeNs) {
+            const marked = Boolean(evidence && (evidence.hostUrl || evidence.referrerUrl || evidence.zoneId !== null));
+            saveMotw.run(identity, fingerprint, marked ? evidence.zoneId : null,
+              marked ? evidence.hostUrl : null, marked ? evidence.referrerUrl : null,
+              marked ? Date.now() : null, Number(marked));
+          }
+        }
+      }
       seen.add(full);
     };
 
@@ -445,6 +486,20 @@ class FileIndex {
       const identity = fileIdentity(await fs.lstat(path, { bigint: true }));
       return identity === record.identity && lookup.get(path)?.identity === identity ? identity : null;
     } catch { return null; }
+  }
+
+  async motwEvidence(path) {
+    const identity = await this.sourceIdentity(path);
+    if (!identity) return null;
+    const row = this.db.prepare(`
+      SELECT zone_id AS zoneId, host_url AS hostUrl, referrer_url AS referrerUrl,
+        observed_at AS observedAt, current_mark AS currentMark
+      FROM file_motw WHERE file_identity = ?
+    `).get(identity);
+    if (!row || (row.zoneId === null && !row.hostUrl && !row.referrerUrl)) return null;
+    return { zoneId: row.zoneId, hostUrl: row.hostUrl, referrerUrl: row.referrerUrl,
+      observedAt: row.observedAt,
+      historical: !row.currentMark || this.get(path)?.status !== "present" };
   }
 
   sourceAliases(identity) {
