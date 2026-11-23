@@ -1,3 +1,11 @@
+## v0.4.7：快速 NTFS 索引（预览）
+
+首次索引直接读取 MFT 文件记录号、父目录号和文件名，随后在本机根据目录关系重建路径。扫描阶段无需逐目录打开文件或检查 ACL；已经扫描且能够解析父目录的文件可以立即通过主搜索框查询。每个磁盘分时扫描，SQLite 保存扫描位置，意外退出后可以接续；完成后使用 USN 日志追赶扫描期间的文件变动。
+
+**隐私与访问权限：** 经 Windows UAC 授权的全盘索引会记录隐藏文件、系统文件以及部分普通账户无法读取内容的文件的名称与路径。索引文件保存在当前用户的 `%APPDATA%\\filerecall-desktop`，不会上传；打开文件或读取正文仍遵循 Windows 权限控制。共用电脑请注意本地索引元数据的可见性。
+
+性能方面，CI 的合成数据库性能测试不代表真实磁盘首次扫描时间，需要在实际 Windows 设备上测量首次可搜索时间、整盘完成时间和资源占用。
+
 ## v0.4.6：中文文件名拼音搜索
 
 主搜索框在普通文件名和路径搜索之外，新增拼音查询：`实验报告.pdf`、`shiyanbaogao`、`sybg`、`pdf sybg`、`sy` 均可匹配同一文件。多个词之间用空格分隔，按“同时匹配”筛选；搜索保留大小写不敏感、中文原名及原有历史记录。
@@ -10,7 +18,7 @@ FileRecall 可以搜索你选定目录中的文件，也能收纳 Chrome 和 Mot
 
 ## 1. 安装与首次使用
 
-1. 在 [Windows 构建记录](https://github.com/afarii/FileRecall/actions/workflows/desktop.yml?query=branch%3Afeat%2Fdesktop-v0.4-mvp) 里打开最新成功的构建，下载并解压 `FileRecall-Windows-x64`，运行其中的 `FileRecall-Setup-*-x64.exe`。安装包适用于 Windows 10／11 x64，内置运行环境，目前为未签名的验收版。
+1. 在 [预览版安装包](https://github.com/afarii/FileRecall/releases/tag/desktop-preview) 里打开最新成功的构建，下载并解压 `FileRecall-Windows-x64`，运行其中的 `FileRecall-Setup-*-x64.exe`。安装包适用于 Windows 10／11 x64，内置运行环境，目前为未签名的验收版。
 2. 打开 FileRecall，点「授权目录 → 添加文件夹」。先选一个几份文档所在的目录，等待界面显示「自动监控中」。
 3. 回到「搜索文件」，输入文件名的一部分。点中文件后，可在右侧详情打开文件、在资源管理器定位或复制路径。
 
