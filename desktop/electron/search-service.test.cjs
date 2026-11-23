@@ -33,6 +33,7 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
   ntfs.apply("E", [
     { id: "77", parent: "5", directory: "E:\\", name: "实验报告.pdf", attributes: 0, reason: 0 },
     { id: "78", parent: "5", directory: "E:\\", name: "system.sys", attributes: 0, reason: 0 },
+    { id: "79", parent: "5", directory: "E:\\", name: "sample-report.txt", attributes: 0, reason: 0 },
   ], true);
   assert.ok((await search.searchLocal("sy")).some((item) => item.name === "实验报告.pdf"));
   local.recordUse(report);
@@ -45,4 +46,8 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
   assert.equal(after[0].useCount, 1);
   assert.equal(after[0].cached, false);
   assert.deepEqual(await search.searchNtfs("sy", []), []);
+  const quick = await search.searchNtfs("report", [{ drive: "E", cached: false }]);
+  assert.deepEqual(quick, [], "indexed hot path skips whole-volume substring scans");
+  const deep = await search.searchNtfsDeep("report", [{ drive: "E", cached: false }]);
+  assert.equal(deep[0].name, "sample-report.txt", "separate worker preserves substring fallback");
 });
