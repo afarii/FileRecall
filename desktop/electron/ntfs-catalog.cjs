@@ -316,8 +316,11 @@ class NtfsCatalog {
     if (!terms.length) return [];
     const primary = [...terms].sort((a, b) => b.length - a.length)[0];
     const upper = primary + "\uffff";
-    const columns = "SELECT i.id, i.parent, i.name, p.path AS directory, i.directory AS isDirectory";
-    const from = "FROM ntfs_item i LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent";
+    const columns = "SELECT i.id, i.parent, i.name, i.folded, i.pinyin, i.initials," +
+      " p.path AS directory, i.directory AS isDirectory," +
+      " coalesce(u.use_count, 0) AS useCount, coalesce(u.last_used_at, 0) AS lastUsedAt";
+    const from = "FROM ntfs_item i LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent" +
+      " LEFT JOIN ntfs_usage u ON u.drive = i.drive AND u.id = i.id";
 
     function filters(words) {
       const clauses = [];
@@ -380,17 +383,40 @@ class NtfsCatalog {
         ...others.args, 100 - results.length);
       collect(matches);
     }
-    if (results.length >= 100) return results;
     // Short initials such as "sy" are handled by indexed prefix scans. Avoid an
     // O(entire disk) infix scan on each keystroke while an input is still changing.
-    if (primary.length <= 2 || results.length >= 40) return results;
+    if (results.length >= 100 || primary.length <= 2 || results.length >= 40) return rank(results);
 
     // Preserve substring searches for longer, more selective queries.
     const all = filters(terms);
     const infix = this.db.prepare(columns + " " + from +
       " WHERE i.drive = ? AND " + all.where + " LIMIT 200").all(drive, ...all.args);
     collect(infix);
-    return results;
+    return rank(results);
+
+    function rank(matches) {
+      const systemPath = /\\\\(?:windows|program files|program files \\(x86\\)|programdata)\\\\/i;
+      const documentType = /\\\\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv)$/i;
+      for (const row of matches) {
+        const name = row.folded || row.name.toLowerCase();
+        const chinese = /[\\p{Script=Han}]/u.test(row.name);
+        let score = Math.min(900, Math.log2(1 + row.useCount) * 220);
+        if (name === query) score += 700;
+        else if (name.startsWith(primary)) score += 280;
+        else if (chinese && row.initials?.startsWith(primary)) score += 370;
+        else if (row.pinyin?.startsWith(primary)) score += 310;
+        else score += 80;
+        if (documentType.test(row.name)) score += 125;
+        if (row.isDirectory) score -= 45;
+        if (/\\\\.(?:sys|dll|exe|mui|log)$/i.test(row.name)) score -= 200;
+        if (systemPath.test(row.directory || "")) score -= 190;
+        row.matchScore = Math.round(score);
+      }
+      matches.sort((a, b) => b.matchScore - a.matchScore ||
+        b.useCount - a.useCount || b.lastUsedAt - a.lastUsedAt ||
+        a.name.localeCompare(b.name));
+      return matches;
+    }
   }
 
   close() { this.db.close(); }
