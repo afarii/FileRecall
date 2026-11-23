@@ -27,7 +27,7 @@ try {
     const rows = [];
     for (let i = offset; i < Math.min(records, offset + 1500); i++) {
       const prefix = i < 35000 ? "report-" : "document-";
-      const name = i === records - 1 ? "unique-search-needle-12345.pdf"
+      const name = i === records - 2 ? "实验报告.pdf" : i === records - 1 ? "unique-search-needle-12345.pdf"
         : i % 97 === 0 ? "课程-报告-" + String(i).padStart(6, "0") + ".pdf"
         : prefix + String(i).padStart(6, "0") + ".pdf";
       rows.push({ id: String(i + 1000), parent: "7", directory: "C:\\SyntheticFiles",
@@ -38,6 +38,7 @@ try {
   const buildMs = Number((performance.now() - start).toFixed(1));
   assert.equal(catalog.search("C", "report-").length, 100);
   assert.equal(catalog.search("C", "unique-search-needle").length, 1);
+  assert.equal(catalog.search("C", "pdf sybg")[0]?.name, "实验报告.pdf");
   assert.equal(catalog.search("C", "never-exists-at-all").length, 0);
   assert.ok(catalog.search("C", "课程").length > 0);
   const bytes = Number(catalog.db.prepare("PRAGMA page_count").get().page_count) *

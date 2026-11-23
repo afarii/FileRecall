@@ -298,7 +298,7 @@ export default function App() {
               <circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 4.4 4.4"/>
             </svg>
             <input type="search" ref={searchInput} aria-label="搜索文件和来源"
-              placeholder={semanticMode ? "用一句话描述你记得的内容" : textEnabled ? "文件名、路径、正文或来源" : "文件名、路径或来源"}
+              placeholder={semanticMode ? "用一句话描述你记得的内容" : "文件名、全拼、首字母、扩展名组合或来源，例如 pdf sybg"}
               value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); }}
               onKeyDown={(event) => {
                 if (event.key !== "ArrowDown") return;

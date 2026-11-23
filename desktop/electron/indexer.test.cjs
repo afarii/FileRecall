@@ -509,3 +509,37 @@ test("MOTW marker changes are captured from file events even when the main file 
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+
+test("pinyin lookup supports full spelling, initials, extension AND and short prefixes across rename and migration", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "filerecall-pinyin-test-"));
+  const folder = join(workspace, "files");
+  const database = join(workspace, "index.sqlite");
+  let index;
+  try {
+    await mkdir(folder);
+    const name = "实验报告.pdf";
+    await writeFile(join(folder, name), "synthetic bytes");
+    index = new FileIndex(database);
+    await index.addRoot(folder);
+    for (const input of [name, "shiyanbaogao", "sybg", "pdf sybg", "sy ", "SYBG"]) {
+      assert.ok(index.search(input).some((entry) => entry.name === name), input);
+    }
+    assert.equal(index.search("docx sybg").length, 0, "multi-term queries require both words");
+    assert.equal(index.search("unrelated").length, 0);
+    await rename(join(folder, name), join(folder, "课程报告.docx"));
+    await index.scan(folder);
+    assert.equal(index.search("kcbg")[0].name, "课程报告.docx");
+    assert.equal(index.search("pdf sybg")[0].status, "missing",
+      "missing file history remains searchable with its original pinyin keys");
+    index.db.prepare("UPDATE files SET name_pinyin = NULL, name_initials = NULL").run();
+    assert.ok(index.backfillSearchKeys(20) >= 2);
+    assert.ok(index.search("kechengbaogao").some((entry) => entry.name === "课程报告.docx"));
+    index.close();
+    index = new FileIndex(database);
+    assert.ok(index.search("pdf sybg").some((entry) => entry.name === name));
+  } finally {
+    index?.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
