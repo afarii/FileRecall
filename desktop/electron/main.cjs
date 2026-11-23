@@ -4,6 +4,7 @@ const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, ne
 const { existsSync } = require("node:fs");
 const { lstat } = require("node:fs/promises");
 const { join } = require("node:path");
+const { setInterval, clearInterval } = require("node:timers");
 const { FileIndex } = require("./indexer.cjs");
 const { DirectoryMonitor } = require("./monitor.cjs");
 const { DownloadSources, downloadPathStatus } = require("./download-sources.cjs");
