@@ -242,7 +242,10 @@ class NtfsCatalog {
           const root = drive + ":\\";
           parentChanged = saveParent.run(drive, row.parent, root, root.toLowerCase()).changes;
         }
-        const keys = nameSearchKeys(row.name);
+        // ASCII-only filenames already have a fast folded-name index; avoid two
+        // redundant phonetic keys and large regex allocations for most MFT rows.
+        const keys = /[\u3400-\u9fff\uf900-\ufaff]/u.test(row.name)
+          ? nameSearchKeys(row.name) : { pinyin: "", initials: "" };
         const itemChanged = saveItem.run(drive, row.id, row.parent, row.name, row.name.toLowerCase(),
           Number(directory), keys.pinyin, keys.initials).changes;
         changed = Boolean(parentChanged || itemChanged) || changed;
