@@ -67,10 +67,19 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData }) {
   // One slow authorized-folder SQL query must not delay MFT filename results.
   const local = createChannel("local");
   const ntfs = createChannel("ntfs");
+  let deep;
   return {
     searchLocal: (query) => local.request(query),
     searchNtfs: (query, drives) => ntfs.request(query, drives),
-    async close() { await Promise.all([local.close(), ntfs.close()]); },
+    // Spawn only when prefix search has no hits. Slow substring scans stay
+    // isolated so that subsequent keystrokes can still return immediately.
+    searchNtfsDeep: (query, drives) => {
+      deep ??= createChannel("ntfs-deep");
+      return deep.request(query, drives);
+    },
+    async close() {
+      await Promise.all([local.close(), ntfs.close(), ...(deep ? [deep.close()] : [])]);
+    },
   };
 }
 
