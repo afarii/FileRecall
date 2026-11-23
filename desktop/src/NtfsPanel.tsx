@@ -100,9 +100,9 @@ export default function NtfsPanel() {
           {item.message && <p className={item.phase === "error" ? "error" : "muted"}>{item.message}</p>}
         </div>
         <button type="button" className="secondary" disabled={busy}
-          onClick={() => void manage(() => item.phase === "paused"
+          onClick={() => void manage(() => String(item.phase) === "paused"
             ? api.enableNtfs(item.drive) : api.disableNtfs(item.drive))}>
-          {item.phase === "paused" ? "恢复索引" : "暂停索引（保留数据）"}</button>
+          {String(item.phase) === "paused" ? "恢复索引" : "暂停索引（保留数据）"}</button>
       </div>)}
       {busy && <p className="muted" role="status">正在连接或更新设置…</p>}
       {ready.size > 0 && <form className="search-form" onSubmit={(event) => { event.preventDefault(); void search(); }}>
