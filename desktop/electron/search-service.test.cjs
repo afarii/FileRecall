@@ -11,7 +11,7 @@ const { createSearchService } = require("./search-service.cjs");
 
 test("worker searches local and NTFS catalogs while main thread writes usage", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "filerecall-search-worker-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+
   const folder = join(root, "files");
   await mkdir(folder);
   const report = join(folder, "实验报告.pdf");
@@ -25,6 +25,7 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
     await search.close();
     local.close();
     ntfs.close();
+    await rm(root, { recursive: true, force: true });
   });
 
   await local.addRoot(folder);
