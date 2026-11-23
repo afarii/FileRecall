@@ -212,7 +212,7 @@ class NtfsSearch {
         this.polling = false;
         if (incomplete && !this.closed) {
           clearTimeout(this.nextPoll);
-          this.nextPoll = setTimeout(() => this.schedulePoll(), 0);
+          this.nextPoll = setTimeout(() => this.schedulePoll(), 120);
           this.nextPoll.unref();
         }
       }
@@ -259,7 +259,7 @@ class NtfsSearch {
           const slice = batch.rows.slice(offset, offset + 192);
           const isLast = offset + slice.length === batch.rows.length;
           this.catalog.apply(drive, slice, true, undefined, isLast ? batch.next : undefined);
-          await new Promise((resolve) => setImmediate(resolve));
+          await new Promise((resolve) => setTimeout(resolve, 8));
         }
         if (!batch.rows.length) this.catalog.apply(drive, [], true, undefined, batch.next);
         processed += batch.rows.length;
