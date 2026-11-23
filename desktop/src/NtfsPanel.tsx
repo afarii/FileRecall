@@ -67,7 +67,7 @@ export default function NtfsPanel() {
   }
 
   const ready = status?.connected
-    ? new Set(status.drives.filter(({ phase }) => phase === "ready").map(({ drive }) => drive))
+    ? new Set(status.drives.filter(({ phase }) => phase === "ready" || phase === "building").map(({ drive }) => drive))
     : new Set<string>();
   const visible = matches.filter((item) => ready.has(item.drive));
   return <section className="folders-view" aria-labelledby="ntfs-heading">
