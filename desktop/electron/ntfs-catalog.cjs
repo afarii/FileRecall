@@ -395,8 +395,8 @@ class NtfsCatalog {
     return rank(results);
 
     function rank(matches) {
-      const systemPath = /\\\\(?:windows|program files|program files \\(x86\\)|programdata)\\\\/i;
-      const documentType = /\\\\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv)$/i;
+      const systemPath = /\\(?:windows|program files|program files \(x86\)|programdata)\\/i;
+      const documentType = /\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv)$/i;
       for (const row of matches) {
         const name = row.folded || row.name.toLowerCase();
         const chinese = /\p{Script=Han}/u.test(row.name);
@@ -408,7 +408,7 @@ class NtfsCatalog {
         else score += 80;
         if (documentType.test(row.name)) score += 125;
         if (row.isDirectory) score -= 45;
-        if (/\\\\.(?:sys|dll|exe|mui|log)$/i.test(row.name)) score -= 200;
+        if (/\.(?:sys|dll|exe|mui|log)$/i.test(row.name)) score -= 200;
         if (systemPath.test(row.directory || "")) score -= 190;
         row.matchScore = Math.round(score);
       }
