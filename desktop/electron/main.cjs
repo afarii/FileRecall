@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, net, safeStorage, shell } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, net, safeStorage, shell, Tray } = require("electron");
 const { existsSync } = require("node:fs");
 const { lstat } = require("node:fs/promises");
 const { join } = require("node:path");
@@ -20,6 +20,7 @@ let monitor;
 let hotkey;
 let semantic;
 let aria2;
+let tray;
 let closing = false;
 let quitReady = false;
 
@@ -29,10 +30,7 @@ if (process.platform === "win32") {
 }
 const ownsLock = app.requestSingleInstanceLock();
 if (!ownsLock) app.quit();
-app.on("second-instance", () => {
-  if (window?.isMinimized()) window.restore();
-  window?.focus();
-});
+app.on("second-instance", showWindow);
 
 function notifyChanged() {
   if (window && !window.isDestroyed()) window.webContents.send("library:changed");
@@ -42,12 +40,42 @@ function send(channel, payload) {
   if (window && !window.isDestroyed()) window.webContents.send(channel, payload);
 }
 
-function focusSearch() {
-  if (!window || window.isDestroyed()) return;
+function showWindow() {
+  if (closing || !index) return null;
+  if (!window || window.isDestroyed()) createWindow();
   if (window.isMinimized()) window.restore();
   window.show();
   window.focus();
-  send("search:focus");
+  return window;
+}
+
+function focusSearch() {
+  const target = showWindow();
+  if (!target) return;
+  if (target.webContents.isLoadingMainFrame()) {
+    target.webContents.once("did-finish-load", () => send("search:focus"));
+  } else {
+    send("search:focus");
+  }
+}
+
+function createTray() {
+  let icon;
+  try {
+    icon = new Tray(join(__dirname, "tray-icon.ico"));
+    icon.setToolTip("FileRecall");
+    icon.setContextMenu(Menu.buildFromTemplate([
+      { label: "打开 FileRecall", click: showWindow },
+      { label: "搜索文件", click: focusSearch },
+      { type: "separator" },
+      { label: "退出 FileRecall", click: () => app.quit() },
+    ]));
+    icon.on("click", showWindow);
+    tray = icon;
+  } catch (error) {
+    icon?.destroy();
+    console.warn("FileRecall system tray unavailable:", error.message);
+  }
 }
 
 function createWindow() {
@@ -64,6 +92,14 @@ function createWindow() {
       sandbox: true,
     },
   });
+  const current = window;
+  current.on("close", (event) => {
+    if (tray && !closing) {
+      event.preventDefault();
+      current.hide();
+    }
+  });
+  current.on("closed", () => { if (window === current) window = undefined; });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   const dev = process.env.FILERECALL_DEV_SERVER;
@@ -238,24 +274,25 @@ app.whenReady().then(() => {
     return true;
   });
 
+  if (process.platform === "win32" && Tray) createTray();
   createWindow();
   monitor.start();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+  app.on("activate", showWindow);
 }).catch((error) => {
   dialog.showErrorBox("FileRecall 启动失败", String(error.message || error));
   app.quit();
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin" && !tray && !closing) app.quit();
 });
 
 app.on("before-quit", (event) => {
-  hotkey?.close();
-  semantic?.clear();
-  aria2?.close();
+  if (!closing) {
+    hotkey?.close();
+    semantic?.clear();
+    aria2?.close();
+  }
   if (monitor && !quitReady) {
     event.preventDefault();
     if (closing) return;
@@ -268,6 +305,9 @@ app.on("before-quit", (event) => {
     });
     return;
   }
+  closing = true;
+  tray?.destroy();
+  tray = undefined;
   index?.close();
   index = undefined;
 });

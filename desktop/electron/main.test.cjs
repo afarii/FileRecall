@@ -8,7 +8,7 @@ const { join } = require("node:path");
 const vm = require("node:vm");
 const { DirectoryMonitor } = require("./monitor.cjs");
 
-async function startMain(index, ownsLock = true) {
+async function startMain(index, ownsLock = true, withTray = false) {
   const app = new EventEmitter();
   let closed = false;
   app.requestSingleInstanceLock = () => ownsLock;
@@ -21,16 +21,39 @@ async function startMain(index, ownsLock = true) {
     if (!prevented) closed = true;
   };
   const handlers = new Map();
+  const windows = [];
+  const shortcuts = new Map();
+  const messages = [];
+  let tray;
   const electron = {
     app,
-    BrowserWindow: class {
+    BrowserWindow: class extends EventEmitter {
       webContents = new EventEmitter();
+      visible = true;
       constructor() {
+        super();
+        windows.push(this);
         this.webContents.setWindowOpenHandler = () => {};
-        this.webContents.send = () => {};
+        this.webContents.send = (channel) => messages.push(channel);
+        this.webContents.isLoadingMainFrame = () => false;
       }
       isDestroyed() { return false; }
+      isMinimized() { return false; }
+      hide() { this.visible = false; }
+      show() { this.visible = true; }
+      focus() {}
       loadFile() {}
+    },
+    Tray: withTray ? class extends EventEmitter {
+      constructor() { super(); tray = this; }
+      setToolTip() {}
+      setContextMenu(menu) { this.menu = menu; }
+      destroy() { this.destroyed = true; }
+    } : undefined,
+    Menu: { buildFromTemplate: (template) => template },
+    globalShortcut: {
+      register(value, callback) { shortcuts.set(value, callback); return true; },
+      unregister(value) { shortcuts.delete(value); },
     },
     dialog: { showErrorBox() {} },
     ipcMain: { handle(name, handler) { handlers.set(name, handler); } },
@@ -60,7 +83,7 @@ async function startMain(index, ownsLock = true) {
     },
   });
   await new Promise((resolve) => setImmediate(resolve));
-  return { app, handlers, monitor, isClosed: () => closed };
+  return { app, handlers, monitor, windows, shortcuts, messages, tray, isClosed: () => closed };
 }
 
 test("main serializes rescans and waits before closing SQLite", { timeout: 5000 }, async () => {
@@ -115,4 +138,41 @@ test("a second instance exits before opening the database or registering IPC", a
   const main = await startMain(undefined, false);
   assert.equal(main.isClosed(), true);
   assert.equal(main.handlers.size, 0);
+});
+
+test("Windows close hides to tray, hotkey and second launch restore, and tray quit closes services", {
+  skip: process.platform !== "win32",
+}, async () => {
+  let databaseClosed = false;
+  const main = await startMain({ roots: () => [], close() { databaseClosed = true; } }, true, true);
+  const [window] = main.windows;
+  let prevented = false;
+  function closeWindow() {
+    prevented = false;
+    window.emit("close", { preventDefault() { prevented = true; } });
+  }
+  closeWindow();
+  assert.equal(prevented, true);
+  assert.equal(window.visible, false);
+  assert.equal(databaseClosed, false);
+  assert.equal(main.isClosed(), false);
+  const hotkey = main.shortcuts.values().next().value;
+  hotkey();
+  assert.equal(window.visible, true);
+  assert.equal(main.messages.at(-1), "search:focus");
+  closeWindow();
+  main.tray.emit("click");
+  assert.equal(window.visible, true);
+  closeWindow();
+  main.app.emit("second-instance");
+  assert.equal(window.visible, true);
+  assert.equal(main.windows.length, 1);
+  main.tray.menu.find(({ label }) => label === "退出 FileRecall").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(main.isClosed(), true);
+  assert.equal(databaseClosed, true);
+  assert.equal(main.tray.destroyed, true);
+  assert.equal(main.shortcuts.size, 0);
+  closeWindow();
+  assert.equal(prevented, false);
 });

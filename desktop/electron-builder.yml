@@ -5,6 +5,7 @@ directories:
 files:
   - dist/**
   - electron/*.cjs
+  - electron/tray-icon.ico
   - "!electron/*.test.cjs"
   - "!electron/launch.cjs"
   - "!node_modules/onnxruntime-node/bin/napi-v3/{darwin,linux}/**"
