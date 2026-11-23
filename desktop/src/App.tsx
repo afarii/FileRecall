@@ -268,12 +268,15 @@ export default function App() {
   const localRecords: SearchRecord[] = useMemo(() => localFiles
     .filter((file) => semanticMode || filter !== "missing" || (file.status === "missing" && !file.currentPath))
     .filter((file) => semanticMode || filter !== "favorites" || file.favorite === 1)
-    .map((file): SearchRecord => ({ type: "local", file })), [localFiles, filter, semanticMode]);
-  const downloadRecords: SearchRecord[] = useMemo(() => (semanticMode || localOnly ? [] : (browser?.files ?? []))
+    .filter((file) => semanticMode || searchQuery.trim() || file.favorite === 1 ||
+      ((file as LocalRanking).useCount ?? 0) > 0)
+    .map((file): SearchRecord => ({ type: "local", file })), [localFiles, filter, semanticMode, searchQuery]);
+  const downloadRecords: SearchRecord[] = useMemo(() => (semanticMode || localOnly ||
+    (!searchQuery.trim() && filter === "all") ? [] : (browser?.files ?? []))
     .filter((file) => filter !== "missing" || file.pathStatus === "missing")
     .filter((file) => filter !== "trusted" || (file.manager === "chrome" && file.canOpenSource))
     .filter((file) => filter !== "candidate" || file.sourceStatus === "candidate")
-    .map((file): SearchRecord => ({ type: "download", file })), [browser, semanticMode, localOnly, filter]);
+    .map((file): SearchRecord => ({ type: "download", file })), [browser, semanticMode, localOnly, filter, searchQuery]);
   const allRecords: UnifiedRecord[] = useMemo(() => {
     const localPaths = new Set(localRecords.filter((record) => record.type === "local")
       .map((record) => (record.type === "local" ? record.file.currentPath || record.file.path : "").toLowerCase()));
@@ -373,6 +376,7 @@ export default function App() {
           <form className="search-form" onSubmit={(event) => {
             event.preventDefault();
             if (semanticMode && semantic.model?.ready && textEnabled) void semantic.search(query);
+            if (!semanticMode) resultPane.current?.querySelector<HTMLButtonElement>(".result-row")?.click();
           }}>
           <label className="search-box">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
@@ -418,8 +422,8 @@ export default function App() {
           {error && <p className="error" role="alert">{error}</p>}
           {!semanticMode && browser?.error && !localOnly && <p className="error" role="alert">{browser.error}</p>}
           {!semanticMode && !hasResults && loading && <p className="empty" role="status">正在搜索…</p>}
-          {!semanticMode && !hasResults && !loading && <p className="empty">{searchQuery.trim() || filter !== "all" ? "没有找到匹配的记录。" :
-            <>暂无文件记录。<button className="secondary" onClick={() => setView("folders")}>管理授权目录</button></>}</p>}
+          {!semanticMode && !hasResults && !loading && <p className="empty">{searchQuery.trim() || filter !== "all"
+            ? "没有找到匹配的记录。" : "输入文件名、拼音或来源即可开始搜索。常用文件会显示在这里。"}</p>}
           {renderRecords(allRecords, semanticMode ? "相近内容" : "搜索结果")}
           <NtfsQuickResults query={searchQuery} enabled={!semanticMode && (filter === "all" || filter === "local") && query === searchQuery}
             onResults={setNtfsResult} />
