@@ -41,10 +41,10 @@ parentPort.on("message", ({ id, kind, query, drives }) => {
       files = [];
     } else if (kind === "local") {
       files = localReader().search(query);
-    } else if (kind === "ntfs") {
+    } else if (kind === "ntfs" || kind === "ntfs-deep") {
       const catalog = ntfsReader();
       files = catalog ? (drives || []).flatMap(({ drive, cached }) =>
-        catalog.search(drive, query).map((row) => ({
+        catalog.search(drive, query, { fastOnly: kind === "ntfs" }).map((row) => ({
           id: row.id, drive, name: row.name, path: fullPath(row),
           directory: Boolean(row.isDirectory), cached,
           useCount: row.useCount || 0, lastUsedAt: row.lastUsedAt || 0,
