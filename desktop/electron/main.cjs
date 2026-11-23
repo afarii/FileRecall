@@ -182,6 +182,8 @@ app.whenReady().then(() => {
   ipcMain.handle("ntfs:disable", (_event, drive) => ntfs?.disable(drive) ?? ntfsStatus());
   ipcMain.handle("ntfs:search", (_event, query) => ntfs
     ? searches.searchNtfs(query, ntfs.searchableDrives()) : []);
+  ipcMain.handle("ntfs:search-deep", (_event, query) => ntfs
+    ? searches.searchNtfsDeep(query, ntfs.searchableDrives()) : []);
   ipcMain.handle("ntfs:motw", async (_event, drive, id) => {
     const path = await ntfs?.target(drive, id);
     return path ? readMotw(path) : null;
