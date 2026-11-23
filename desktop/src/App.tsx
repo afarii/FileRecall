@@ -6,6 +6,7 @@ import DesktopUpdates from "./DesktopUpdates";
 import NtfsPanel from "./NtfsPanel";
 import NtfsQuickResults from "./NtfsQuickResults";
 import NtfsDetails from "./NtfsDetails";
+import PerformanceDiagnostics from "./PerformanceDiagnostics";
 import useSemanticSearch from "./useSemanticSearch";
 import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } from "./FileDetails";
 import logo from "../../filerecall.svg";
@@ -53,6 +54,21 @@ export default function App() {
   const [ntfsResult, setNtfsResult] = useState<{ query: string; files: NtfsResult[] }>();
   const selectedButton = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
+  useEffect(() => {
+    let last = performance.now();
+    const timer = window.setInterval(() => {
+      const now = performance.now();
+      const lag = Math.max(0, now - last - 1000);
+      last = now;
+      if (document.visibilityState === "visible" && lag > 250) {
+        const api = window.fileRecall as typeof window.fileRecall & {
+          reportRendererLag: (ms: number) => Promise<void>;
+        };
+        void api.reportRendererLag(lag).catch(() => {});
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedResults, setExpandedResults] = useState(false);
   useEffect(() => {
@@ -366,6 +382,7 @@ export default function App() {
           <ChromeConnection refresh={refreshDownloads} />
           <Aria2Connection />
           <DesktopUpdates />
+          <PerformanceDiagnostics />
         </div>
       </section> : view === "ntfs" ? <NtfsPanel /> : view === "files" ? <div className={`search-layout ${selectedRecord ? "with-details" : ""}`}>
         <section ref={resultPane} className="search-content" aria-labelledby="search-heading">
