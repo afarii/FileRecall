@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>下载历史 · FileRecall</title>
+  <link rel="stylesheet" href="ui-theme.css">
   <link rel="stylesheet" href="history.css">
   <script type="module" src="history.js"></script>
+  <script type="module" src="desktop-sync.mjs"></script>
 </head>
 <body>
   <svg class="svg-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -20,32 +22,36 @@
     <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
   </svg>
 
-  <aside class="sidebar" aria-label="FileRecall">
+  <header class="sidebar" aria-label="FileRecall">
     <a class="brand" href="history.html" aria-label="FileRecall 下载历史">
-      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M18 6H9v20h14V11l-5-5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M18 6v6h5M11 18h9m-9 0 3-3m-3 3 3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-      <span>FileRecall<span class="brand-caption">让下载记得来处</span></span>
+      <span class="brand-mark"><img src="filerecall.svg" alt=""></span>
+      <span>FileRecall</span>
     </a>
-    <nav aria-label="导航"><a class="nav-item" href="history.html" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#icon-history"/></svg>下载历史</a></nav>
-    <div class="sidebar-footer"><svg class="icon" aria-hidden="true"><use href="#icon-lock"/></svg><span>本地优先<span>记录保存在此浏览器</span></span></div>
-  </aside>
+    <div class="sidebar-footer"><svg class="icon" aria-hidden="true"><use href="#icon-lock"/></svg><span>记录保存在此浏览器</span></div>
+  </header>
 
   <main class="main-content" id="main-content">
     <header class="page-header">
-      <div><p class="eyebrow">YOUR DOWNLOADS, REMEMBERED</p><h1>下载历史</h1><p class="page-description">回看文件，以及它们的来处。</p></div>
-      <button id="refresh" class="button secondary" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg><span>刷新记录</span></button>
+      <h1>下载历史</h1>
+      <div class="file-action-buttons">
+        <button id="refresh" class="button secondary" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg><span>刷新记录</span></button>
+        <button id="desktop-sync" class="button primary" type="button">同步到桌面</button>
+      </div>
     </header>
 
-    <section class="history-import" aria-label="导入 Chrome 下载历史">
-      <div class="file-action-buttons"><button id="import-history" class="button secondary" type="button">导入 Chrome 历史</button><button id="import-next" class="button secondary" type="button" hidden>继续导入下一批</button></div>
-      <p>每批最多导入 100 条；已有记录保持不变。历史记录无法恢复过去的点击上下文，来源将标记为未知。</p>
-      <p id="import-status" role="status" aria-live="polite"></p>
-    </section>
+    <p id="desktop-sync-status" class="sync-status" role="status" aria-live="polite"></p>
     <section class="history-card" aria-label="下载记录">
       <div class="history-search"><label for="history-search">搜索下载历史</label><input id="history-search" type="search" placeholder="文件名、来源域名或页面标题" aria-controls="records"></div>
       <div class="history-filters">
         <div><label for="source-filter">来源状态</label><select id="source-filter" aria-controls="records"><option value="">全部</option><option value="matched">自动关联</option><option value="confirmed">人工确认候选</option><option value="manual">人工填写</option><option value="candidate">候选未确认</option><option value="unknown">未知</option><option value="rejected">已排除</option></select></div>
         <div><label for="download-filter">下载状态</label><select id="download-filter" aria-controls="records"><option value="">全部</option><option value="complete">已完成</option><option value="in_progress">下载中</option><option value="interrupted">已中断</option></select></div>
       </div>
+      <details class="history-import">
+        <summary>导入旧下载记录</summary>
+        <p>每批最多导入 100 条，导入记录的来源标记为未知。</p>
+        <div class="file-action-buttons"><button id="import-history" class="button secondary" type="button">导入 Chrome 历史</button><button id="import-next" class="button secondary" type="button" hidden>继续导入下一批</button></div>
+        <p id="import-status" role="status" aria-live="polite"></p>
+      </details>
       <div class="list-toolbar"><div class="list-title">全部记录 <span id="record-count" class="count">—</span></div><span class="sort-label">按下载时间倒序</span></div>
       <p id="data-warning" class="data-warning" role="status" hidden></p>
       <div id="history-state" class="state-panel" role="status" aria-live="polite">
@@ -59,7 +65,6 @@
       </div>
       <footer class="list-footer"><span class="footer-dot" aria-hidden="true"></span>记录随下载自动更新<span class="footer-hint">点击文件查看详情</span></footer>
     </section>
-    <p class="page-footnote">每一条来源，都保留它的确定与不确定。</p>
     <span id="announcement" class="sr-only" aria-live="polite"></span>
     <noscript>需要启用 JavaScript 才能读取下载记录。</noscript>
   </main>

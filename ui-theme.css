@@ -1,0 +1,14 @@
+:root {
+  --fr-paper: #fffefa;
+  --fr-canvas: #f3f2ed;
+  --fr-ink: #242925;
+  --fr-muted: #606a62;
+  --fr-line: #e4e6de;
+  --fr-accent: #9b3e29;
+  --fr-hover: #f7ebe4;
+  --fr-good: #225c40;
+  --fr-good-bg: #e9f4eb;
+  --fr-warn: #795020;
+  --fr-warn-bg: #f8eee1;
+  --fr-font: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+}

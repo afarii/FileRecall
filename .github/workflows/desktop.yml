@@ -1,0 +1,62 @@
+name: Desktop MVP
+on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "desktop-sync*.mjs"
+      - "history.html"
+      - "history.css"
+      - "ui-theme.css"
+      - "filerecall.svg"
+      - "manifest.json"
+      - ".github/workflows/desktop.yml"
+  push:
+    branches:
+      - "feat/desktop-v0.4-mvp"
+    paths:
+      - "desktop/**"
+      - "desktop-sync*.mjs"
+      - "history.html"
+      - "history.css"
+      - "ui-theme.css"
+      - "filerecall.svg"
+      - "manifest.json"
+      - ".github/workflows/desktop.yml"
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Build Chrome Native Messaging host
+        run: ./desktop/native/register-chrome.ps1 -ExtensionId aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -BuildOnly
+      - name: Run extension regression tests
+        run: node --test *.test.mjs
+      - name: Run unit tests
+        working-directory: desktop
+        run: npm test
+      - name: Benchmark synthetic NTFS catalog searches
+        working-directory: desktop
+        run: node bench/ntfs-catalog.mjs
+      - name: Build Windows installer
+        working-directory: desktop
+        run: npm run package:win
+      - name: Test packaged Chrome host
+        working-directory: desktop
+        run: |
+          $env:FILERECALL_PACKAGED_HOST = (Resolve-Path release/win-unpacked/resources/native/filerecall-host.exe).Path
+          node --test electron/download-sources.test.cjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FileRecall-Windows-x64
+          path: |
+            desktop/release/FileRecall-Setup-*-x64.exe
+            desktop/release/FileRecall-Setup-*-x64.exe.blockmap
+            desktop/release/latest.yml
+          if-no-files-found: error
