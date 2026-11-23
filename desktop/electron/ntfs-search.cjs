@@ -238,8 +238,14 @@ class NtfsSearch {
     if (state.build_position !== null || !cursor || BigInt(cursor) < BigInt(info.first) ||
         BigInt(cursor) > BigInt(info.next) || live?.phase === "rebuild") {
       const wasBuilding = live?.phase === "building";
+      const continuing = state.build_position !== null;
       if (!wasBuilding) {
-        this.sessions.set(drive, { phase: "building", message: "正在扫描 MFT 文件记录…" });
+        const reason = continuing ? "继续上次未完成的索引"
+          : !cursor ? "首次建立文件名索引"
+            : state.journal !== info.journal ? "NTFS 变更日志已替换，正在重新建立索引"
+              : BigInt(cursor) < BigInt(info.first) ? "变更日志已过期，正在重新建立索引"
+                : "正在校正文件名索引";
+        this.sessions.set(drive, { phase: "building", message: reason });
         this.notify();
       }
       let position = this.catalog.beginBuild(drive, info.journal, info.next);
@@ -274,7 +280,7 @@ class NtfsSearch {
       if (this.closed || this.cancelled?.has(drive)) return false;
       if (!finished) {
         this.sessions.set(drive, { phase: "building", processed,
-          message: `已扫描 ${processed.toLocaleString("zh-CN")} 条文件记录` });
+          message: `${continuing ? "继续索引" : "已扫描"} ${processed.toLocaleString("zh-CN")} 条文件记录` });
         this.notify();
         return true;
       }
