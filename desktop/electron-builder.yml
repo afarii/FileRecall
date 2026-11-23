@@ -21,6 +21,7 @@ extraResources:
     to: native
     filter:
       - filerecall-host.exe
+      - filerecall-ntfs.exe
   - from: electron
     to: electron
     filter:

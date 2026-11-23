@@ -14,6 +14,7 @@ const { createSemanticSearch } = require("./semantic-search.cjs");
 const { createProvenance } = require("./provenance.cjs");
 const { createAria2Connection } = require("./aria2-connection.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
+const { NtfsSearch } = require("./ntfs-search.cjs");
 
 let window;
 let index;
@@ -22,6 +23,8 @@ let hotkey;
 let semantic;
 let aria2;
 let updates;
+let ntfs;
+let ntfsClosing;
 let updateNotification;
 let tray;
 let closing = false;
@@ -122,6 +125,37 @@ app.whenReady().then(() => {
   const modelPath = join(userData, "models", "multilingual-e5-small");
   const packagedWindows = app.isPackaged && process.platform === "win32";
   if (packagedWindows) app.setAppUserModelId("com.filerecall.desktop");
+  if (packagedWindows) {
+    const ntfsReader = join(process.resourcesPath, "native", "filerecall-ntfs.exe");
+    if (existsSync(ntfsReader)) {
+      try {
+        ntfs = new NtfsSearch(join(userData, "ntfs-index.sqlite"), userData, ntfsReader, {
+          onChange: (state) => send("ntfs:changed", state),
+          onPaths: (drive, paths) => monitor.applyJournal(drive, paths),
+          onActiveDrives: (drives) => monitor.setJournalDrives(drives),
+        });
+      } catch (error) {
+        console.warn("NTFS index unavailable:", error.message);
+      }
+    }
+  }
+  const ntfsStatus = () => ntfs?.status() ?? { available: false, connected: false, drives: [] };
+  ipcMain.handle("ntfs:status", ntfsStatus);
+  ipcMain.handle("ntfs:connect", () => ntfs?.reconnect() ?? ntfsStatus());
+  ipcMain.handle("ntfs:enable", (_event, drive) => ntfs?.enable(drive) ?? ntfsStatus());
+  ipcMain.handle("ntfs:disable", (_event, drive) => ntfs?.disable(drive) ?? ntfsStatus());
+  ipcMain.handle("ntfs:search", (_event, query) => ntfs?.search(query) ?? []);
+  ipcMain.handle("ntfs:reveal", async (_event, drive, id) => {
+    const path = ntfs?.target(drive, id);
+    if (!path) return false;
+    try {
+      if ((await lstat(path)).isSymbolicLink() || ntfs.target(drive, id) !== path) return false;
+      shell.showItemInFolder(path);
+      return true;
+    } catch {
+      return false;
+    }
+  });
   updates = createDesktopUpdates({
     currentVersion: app.getVersion?.() ?? "",
     updater: packagedWindows ? require("electron-updater").autoUpdater : null,
@@ -323,12 +357,13 @@ app.on("before-quit", (event) => {
     aria2?.close();
     updates?.close();
     updateNotification?.close();
+    ntfsClosing = ntfs?.close();
   }
   if (monitor && !quitReady) {
     event.preventDefault();
     if (closing) return;
     closing = true;
-    monitor.close().then(() => {
+    Promise.allSettled([monitor.close(), ntfsClosing]).then(() => {
       index?.close();
       index = undefined;
       quitReady = true;

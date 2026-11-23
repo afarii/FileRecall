@@ -1,7 +1,7 @@
 "use strict";
 
 const { watch } = require("node:fs");
-const { lstat } = require("node:fs/promises");
+const { lstat, realpath } = require("node:fs/promises");
 const { resolve } = require("node:path");
 const { directoryIdentity, isWithin } = require("./indexer.cjs");
 
@@ -18,6 +18,7 @@ class DirectoryMonitor {
     this.recoveryMs = recoveryMs;
     this.reconcileMs = reconcileMs;
     this.entries = new Map();
+    this.journalDrives = new Set();
     this.tail = Promise.resolve();
     this.stopped = false;
   }
@@ -42,7 +43,7 @@ class DirectoryMonitor {
     try {
       for (const entry of this.entries.values()) {
         if (this.stopped) break;
-        if (entry.watcher && entry.state !== "scanning" &&
+        if (entry.watcher && !this.journalDrives.has(entry.journalDrive) && entry.state !== "scanning" &&
             entry.lastScanAt && Date.now() - entry.lastScanAt >= this.reconcileMs) {
           if (!entry.fullScan) this.requestScan(entry.path, 0);
           continue;
@@ -62,6 +63,32 @@ class DirectoryMonitor {
     } finally {
       this.checkingRoots = false;
     }
+  }
+
+  setJournalDrives(drives) {
+    this.journalDrives = new Set(drives);
+  }
+
+  applyJournal(drive, paths) {
+    return this.run(async () => {
+      let changed = false;
+      for (const entry of this.entries.values()) {
+        if (entry.journalDrive !== drive) continue;
+        const affected = paths.filter((path) => isWithin(entry.path, path));
+        if (paths.some((path) => path.toLowerCase() === entry.path.toLowerCase()) || affected.length > MAX_PENDING_PATHS) {
+          this.requestScan(entry.path, 0);
+        } else if (affected.length) {
+          try {
+            const result = await this.index.updatePaths(entry.path, affected);
+            if (!result.complete) this.requestScan(entry.path, 0);
+            changed ||= Boolean(result.changed);
+          } catch {
+            this.requestScan(entry.path, 0);
+          }
+        }
+      }
+      if (changed) this.onChange();
+    });
   }
 
   syncRoots() {
@@ -100,6 +127,10 @@ class DirectoryMonitor {
     try {
       const identity = directoryIdentity(await lstat(entry.path, { bigint: true }));
       if (!identity) throw new Error("目录不可用或已替换为链接。");
+      if (process.platform === "win32" && /^[a-z]:\\/i.test(entry.path)) {
+        const canonical = await realpath(entry.path);
+        entry.journalDrive = canonical.toLowerCase() === entry.path.toLowerCase() ? entry.path[0].toUpperCase() : undefined;
+      }
       if (this.stopped || this.entries.get(entry.path) !== entry) return;
       const watcher = this.watchDirectory(entry.path, { recursive: true, persistent: false }, (_event, filename) => {
         if (entry.watcher !== watcher || this.stopped) return;

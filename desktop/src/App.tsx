@@ -3,12 +3,13 @@ import ChromeConnection from "./ChromeConnection";
 import Aria2Connection from "./Aria2Connection";
 import HotkeySettings from "./HotkeySettings";
 import DesktopUpdates from "./DesktopUpdates";
+import NtfsPanel from "./NtfsPanel";
 import useSemanticSearch from "./useSemanticSearch";
 import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } from "./FileDetails";
 import logo from "../../filerecall.svg";
 
 export default function App() {
-  const [view, setView] = useState<"files" | "folders">("files");
+  const [view, setView] = useState<"files" | "folders" | "ntfs">("files");
   const [folders, setFolders] = useState<IndexedFolder[]>([]);
   const [historyFolders, setHistoryFolders] = useState<Array<{ path: string; count: number }>>([]);
   const [clearingFolder, setClearingFolder] = useState<string | null>(null);
@@ -271,12 +272,13 @@ export default function App() {
       <nav className="app-nav" aria-label="主要功能">
         <button aria-pressed={view === "files"} onClick={() => setView("files")}>搜索文件</button>
         <button aria-pressed={view === "folders"} onClick={() => { setSelected(null); setView("folders"); }}>授权目录</button>
+        <button aria-pressed={view === "ntfs"} onClick={() => { setSelected(null); setView("ntfs"); }}>整盘搜索</button>
         <HotkeySettings />
         <ChromeConnection refresh={refreshDownloads} />
         <Aria2Connection />
         <DesktopUpdates />
       </nav>
-      {view === "files" ? <div className={`search-layout ${selectedRecord ? "with-details" : ""}`}>
+      {view === "ntfs" ? <NtfsPanel /> : view === "files" ? <div className={`search-layout ${selectedRecord ? "with-details" : ""}`}>
         <section ref={resultPane} className="search-content" aria-labelledby="search-heading">
           <h1 id="search-heading">搜索文件</h1>
           <div className="search-modes" role="group" aria-label="搜索方式">

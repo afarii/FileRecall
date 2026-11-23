@@ -93,6 +93,20 @@ interface DesktopUpdateStatus {
   message?: string;
 }
 
+interface NtfsStatus {
+  available: boolean;
+  connected: boolean;
+  drives: Array<{ drive: string; phase: "disconnected" | "building" | "rebuild" | "catching-up" | "ready" | "error"; message?: string }>;
+}
+
+interface NtfsResult {
+  id: string;
+  drive: string;
+  path: string;
+  name: string;
+  directory: boolean;
+}
+
 interface Window {
   fileRecall: {
     folders(): Promise<IndexedFolder[]>;
@@ -130,6 +144,13 @@ interface Window {
     downloadUpdate(): Promise<DesktopUpdateStatus>;
     installUpdate(): Promise<DesktopUpdateStatus>;
     onUpdateStatus(callback: (status: DesktopUpdateStatus) => void): () => void;
+    ntfsStatus(): Promise<NtfsStatus>;
+    connectNtfs(): Promise<NtfsStatus>;
+    enableNtfs(drive: string): Promise<NtfsStatus>;
+    disableNtfs(drive: string): Promise<NtfsStatus>;
+    searchNtfs(query: string): Promise<NtfsResult[]>;
+    revealNtfs(drive: string, id: string): Promise<boolean>;
+    onNtfsChanged(callback: (status: NtfsStatus) => void): () => void;
     semanticStatus(): Promise<ModelStatus>;
     installSemantic(): Promise<ModelStatus>;
     semanticSearch(query: string): Promise<SemanticResult>;

@@ -144,8 +144,9 @@ class FileIndex {
 
   isInternalPath(path) {
     const full = resolve(path);
-    const downloadsPath = join(dirname(this.databasePath), "browser-downloads.sqlite");
-    const internal = [this.databasePath, downloadsPath].flatMap((path) => [path, path + "-wal", path + "-shm"]);
+    const profile = dirname(this.databasePath);
+    const internal = [this.databasePath, join(profile, "browser-downloads.sqlite"), join(profile, "ntfs-index.sqlite")]
+      .flatMap((path) => [path, path + "-wal", path + "-shm"]);
     return internal.some((candidate) => process.platform === "win32"
       ? candidate.toLowerCase() === full.toLowerCase() : candidate === full);
   }
