@@ -47,6 +47,8 @@ interface MotwEvidence {
   zoneId: number | null;
   hostUrl: string | null;
   referrerUrl: string | null;
+  observedAt?: number | null;
+  historical?: boolean;
 }
 
 interface FileProvenance {

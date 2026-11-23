@@ -304,10 +304,7 @@ app.whenReady().then(() => {
     return results;
   }));
   ipcMain.handle("files:search", (_event, query) => index.search(query));
-  ipcMain.handle("files:motw", async (_event, path) => {
-    const target = await fileTarget(path);
-    return target ? readMotw(target) : null;
-  });
+  ipcMain.handle("files:motw", (_event, path) => index.motwEvidence(path));
   ipcMain.handle("files:text-enabled", () => index.textEnabled());
   ipcMain.handle("files:set-text-enabled", (_event, enabled) => monitor.run(() => {
     index.setTextEnabled(enabled);

@@ -436,3 +436,47 @@ test("history clearing rolls back on failure and prevents reindexing by an autho
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test("MOTW evidence survives a rename and deletion, stays bound to file identity and is erased with history", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "filerecall-motw-test-"));
+  const folder = join(workspace, "files");
+  const oldPath = join(folder, "example.pdf");
+  const currentPath = join(folder, "moved.pdf");
+  const evidence = { zoneId: 3, hostUrl: "https://example.org/sample.pdf",
+    referrerUrl: "https://example.org/article" };
+  let reads = 0;
+  let index;
+  try {
+    await mkdir(folder);
+    await writeFile(oldPath, "synthetic content");
+    index = new FileIndex(join(workspace, "index.sqlite"), {
+      trackMotw: true,
+      motwReader: async () => { reads++; return evidence; },
+    });
+    await index.addRoot(folder);
+    assert.deepEqual(
+      { hostUrl: (await index.motwEvidence(oldPath))?.hostUrl,
+        historical: (await index.motwEvidence(oldPath))?.historical },
+      { hostUrl: evidence.hostUrl, historical: false },
+    );
+    await index.scan(folder);
+    assert.equal(reads, 1, "unchanged files should not re-read the alternate stream");
+    await rename(oldPath, currentPath);
+    await index.scan(folder);
+    assert.equal(reads, 1, "renaming a file retains the same identity and its cached evidence");
+    assert.equal((await index.motwEvidence(oldPath)).historical, true);
+    assert.equal((await index.motwEvidence(currentPath)).referrerUrl, evidence.referrerUrl);
+    await unlink(currentPath);
+    await index.scan(folder);
+    assert.equal((await index.motwEvidence(oldPath)).hostUrl, evidence.hostUrl);
+    assert.equal((await index.motwEvidence(currentPath)).historical, true);
+    await writeFile(oldPath, "replacement content");
+    await index.scan(folder);
+    assert.equal((await index.motwEvidence(oldPath)).historical, false);
+    assert.equal(index.clearHistory(folder), 2);
+    assert.equal(index.db.prepare("SELECT COUNT(*) AS count FROM file_motw").get().count, 0);
+  } finally {
+    index?.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
