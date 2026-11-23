@@ -1,5 +1,8 @@
 appId: com.filerecall.desktop
 productName: FileRecall
+publish:
+  provider: generic
+  url: https://github.com/afarii/FileRecall/releases/download/desktop-preview/
 directories:
   output: release
 files:

@@ -4,11 +4,13 @@ FileRecall 可以搜索你选定目录中的文件，也能收纳 Chrome 和 Mot
 
 ## 1. 安装与首次使用
 
-1. 在 [Windows x64 验收包](https://github.com/afarii/FileRecall/actions/runs/45117804793/artifacts/14792561068) 中下载并解压 `FileRecall-Windows-x64`，运行 `FileRecall-Setup-0.4.0-x64.exe`。安装包适用于 Windows 10／11 x64，内置运行环境，目前为未签名的验收版。
+1. 在 [Windows 构建记录](https://github.com/afarii/FileRecall/actions/workflows/desktop.yml?query=branch%3Afeat%2Fdesktop-v0.4-mvp) 里打开最新成功的构建，下载并解压 `FileRecall-Windows-x64`，运行其中的 `FileRecall-Setup-*-x64.exe`。安装包适用于 Windows 10／11 x64，内置运行环境，目前为未签名的验收版。
 2. 打开 FileRecall，点「授权目录 → 添加文件夹」。先选一个几份文档所在的目录，等待界面显示「自动监控中」。
 3. 回到「搜索文件」，输入文件名的一部分。点中文件后，可在右侧详情打开文件、在资源管理器定位或复制路径。
 
-已有 Windows 版本时，先完全退出 FileRecall，再运行新安装包覆盖安装。有托盘图标时可右键选择「退出 FileRecall」。索引和设置保存在当前 Windows 用户的 `%APPDATA%\filerecall-desktop`。
+从 v0.4.0 升级时，右键托盘图标选择「退出 FileRecall」，再用 v0.4.1 安装包覆盖安装。索引和设置保存在当前 Windows 用户的 `%APPDATA%\filerecall-desktop`。
+
+从 v0.4.1 起，Windows 安装版在运行期间会检查预览版更新，缩到托盘时也会检查。也可以从顶部「软件更新」手动检查。看到新版时，依次点「下载新版」和「重启并安装」。客户端只向 GitHub 请求更新信息和安装包。
 
 ## 2. 搜文件和正文
 

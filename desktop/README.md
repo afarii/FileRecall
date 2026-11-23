@@ -22,13 +22,15 @@ Windows 桌面端支持本地文件索引，以及由 Chrome 扩展发起的下�
 
 ## Windows 安装与升级
 
-从 GitHub Actions 的构建产物获取 `FileRecall-Windows-x64`，解压后运行 `FileRecall-Setup-0.4.0-x64.exe`，选择为当前用户安装。验收包面向 Windows 10/11 x64，包含运行环境，暂未签名。
+从 GitHub Actions 的构建产物获取 `FileRecall-Windows-x64`，解压后运行 `FileRecall-Setup-*-x64.exe`，选择为当前用户安装。验收包面向 Windows 10/11 x64，包含运行环境，暂未签名。
 
-安装版沿用 `%APPDATA%\filerecall-desktop` 中的文件索引和浏览器下载库。升级前退出 FileRecall，再运行新版安装包。卸载会删除安装文件和安装版创建的 Chrome 注册项，应用数据目录保留。
+安装版沿用 `%APPDATA%\filerecall-desktop` 中的文件索引和浏览器下载库。从 v0.4.0 升级时，先从托盘退出 FileRecall，再运行 v0.4.1 安装包。v0.4.1 起可在「软件更新」检查、下载并安装新版。卸载会删除安装文件和安装版创建的 Chrome 注册项，应用数据目录保留。
 
 在安装版中打开「Chrome 设置」，按提示粘贴已安装的 FileRecall 扩展 ID 并保存。之后在 Chrome 扩展历史页发起同步，首次同步需通过 Chrome 的权限提示。扩展仍通过现有 Chrome 扩展程序页面安装或更新。
 
 本地构建安装包使用 `npm ci` 和 `npm run package:win`，在 `desktop/release` 获取安装文件。打包机需要 Windows、Node.js 24 和 Windows .NET Framework 编译器。
+
+验收后的桌面预览版使用 GitHub Releases 的 `desktop-preview` 预发布渠道。提高 `desktop/package.json` 和锁文件的版本号并构建后，先把同一次构建的版本化 `.exe` 和 `.exe.blockmap` 上传到该预发布，再替换 `latest.yml`。保留上一版安装包及块映射可用于增量下载。Actions 只生成这些文件，发布由维护者执行。
 
 ### 安装版验收
 

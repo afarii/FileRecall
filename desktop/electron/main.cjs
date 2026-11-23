@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, net, safeStorage, shell, Tray } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, net, Notification, safeStorage, shell, Tray } = require("electron");
 const { existsSync } = require("node:fs");
 const { lstat } = require("node:fs/promises");
 const { join } = require("node:path");
@@ -13,6 +13,7 @@ const { semanticModel } = require("./semantic-model.cjs");
 const { createSemanticSearch } = require("./semantic-search.cjs");
 const { createProvenance } = require("./provenance.cjs");
 const { createAria2Connection } = require("./aria2-connection.cjs");
+const { createDesktopUpdates } = require("./desktop-updates.cjs");
 
 let window;
 let index;
@@ -20,6 +21,8 @@ let monitor;
 let hotkey;
 let semantic;
 let aria2;
+let updates;
+let updateNotification;
 let tray;
 let closing = false;
 let quitReady = false;
@@ -117,6 +120,32 @@ app.whenReady().then(() => {
   index = new FileIndex(databasePath);
   monitor = new DirectoryMonitor(index, { onChange: notifyChanged });
   const modelPath = join(userData, "models", "multilingual-e5-small");
+  const packagedWindows = app.isPackaged && process.platform === "win32";
+  if (packagedWindows) app.setAppUserModelId("com.filerecall.desktop");
+  updates = createDesktopUpdates({
+    currentVersion: app.getVersion?.() ?? "",
+    updater: packagedWindows ? require("electron-updater").autoUpdater : null,
+    onChange: (status) => send("updates:changed", status),
+    onAvailable: (version) => {
+      if (!Notification?.isSupported()) return;
+      updateNotification?.close();
+      const notification = new Notification({
+        title: "FileRecall 有新版",
+        body: `版本 ${version} 已可下载。打开 FileRecall，在「软件更新」中继续。`,
+      });
+      updateNotification = notification;
+      notification.on("click", showWindow);
+      try {
+        notification.show();
+      } catch (error) {
+        console.warn("FileRecall update notification unavailable:", error.message);
+      }
+    },
+  });
+  ipcMain.handle("updates:status", updates.status);
+  ipcMain.handle("updates:check", updates.check);
+  ipcMain.handle("updates:download", updates.download);
+  ipcMain.handle("updates:install", () => monitor.run(updates.install));
   const model = semanticModel(modelPath, (url, options) => net.fetch(url, options), (progress) => send("semantic:download-progress", progress));
   semantic = createSemanticSearch(databasePath, modelPath, (progress) => send("semantic:search-progress", progress));
   hotkey = createHotkey(globalShortcut, userData, focusSearch);
@@ -292,6 +321,8 @@ app.on("before-quit", (event) => {
     hotkey?.close();
     semantic?.clear();
     aria2?.close();
+    updates?.close();
+    updateNotification?.close();
   }
   if (monitor && !quitReady) {
     event.preventDefault();

@@ -52,5 +52,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: FileRecall-Windows-x64
-          path: desktop/release/FileRecall-Setup-*-x64.exe
+          path: |
+            desktop/release/FileRecall-Setup-*-x64.exe
+            desktop/release/FileRecall-Setup-*-x64.exe.blockmap
+            desktop/release/latest.yml
           if-no-files-found: error

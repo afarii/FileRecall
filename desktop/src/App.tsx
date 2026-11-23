@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ChromeConnection from "./ChromeConnection";
 import Aria2Connection from "./Aria2Connection";
 import HotkeySettings from "./HotkeySettings";
+import DesktopUpdates from "./DesktopUpdates";
 import useSemanticSearch from "./useSemanticSearch";
 import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } from "./FileDetails";
 import logo from "../../filerecall.svg";
@@ -273,6 +274,7 @@ export default function App() {
         <HotkeySettings />
         <ChromeConnection refresh={refreshDownloads} />
         <Aria2Connection />
+        <DesktopUpdates />
       </nav>
       {view === "files" ? <div className={`search-layout ${selectedRecord ? "with-details" : ""}`}>
         <section ref={resultPane} className="search-content" aria-labelledby="search-heading">

@@ -85,6 +85,14 @@ interface Aria2Sync {
   changed: number;
 }
 
+interface DesktopUpdateStatus {
+  currentVersion: string;
+  phase: "idle" | "unsupported" | "checking" | "current" | "available" | "downloading" | "ready" | "installing";
+  version?: string;
+  percent?: number;
+  message?: string;
+}
+
 interface Window {
   fileRecall: {
     folders(): Promise<IndexedFolder[]>;
@@ -117,6 +125,11 @@ interface Window {
     hotkey(): Promise<{ shortcut: string; registered: boolean }>;
     setHotkey(value: string): Promise<{ ok: true; shortcut: string } | { ok: false; message: string }>;
     onSearchFocus(callback: () => void): () => void;
+    updateStatus(): Promise<DesktopUpdateStatus>;
+    checkUpdate(): Promise<DesktopUpdateStatus>;
+    downloadUpdate(): Promise<DesktopUpdateStatus>;
+    installUpdate(): Promise<DesktopUpdateStatus>;
+    onUpdateStatus(callback: (status: DesktopUpdateStatus) => void): () => void;
     semanticStatus(): Promise<ModelStatus>;
     installSemantic(): Promise<ModelStatus>;
     semanticSearch(query: string): Promise<SemanticResult>;

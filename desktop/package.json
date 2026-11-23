@@ -1,7 +1,7 @@
 {
   "name": "filerecall-desktop",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "FileRecall local file and download history",
   "author": "FileRecall contributors",
   "type": "module",
@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@huggingface/tokenizers": "0.2.0",
+    "electron-updater": "6.8.11",
     "onnxruntime-node": "1.21.0",
     "saxes": "6.0.0",
     "unpdf": "2.2.1",
