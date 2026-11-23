@@ -57,13 +57,14 @@ export default function NtfsQuickResults({ query, enabled, existingPaths, onCoun
         onClick={() => { setSelected(item); onSelect(); }}>
         <FileTile name={item.name} />
         <span className="result-copy"><strong>{item.name}</strong><span title={item.path}>{item.path}</span></span>
-        <span className="badge">{item.directory ? "文件夹" : "整盘索引"}</span>
+        <span className="badge">{item.cached ? "索引缓存" : item.directory ? "文件夹" : "整盘索引"}</span>
       </button>)}
       {selected && matches.some((item) => item.drive === selected.drive && item.id === selected.id) &&
         <section className="source-candidate" aria-label="整盘文件详情">
           <strong>{selected.name}</strong><p>{selected.path}</p>
-          <button type="button" onClick={() => void reveal(selected)}>在文件夹中显示</button>
-          {!selected.directory && <MotwInfo drive={selected.drive} fileId={selected.id} />}
+          {selected.cached ? <p className="muted">缓存记录待连接 NTFS 助手核验，重连后可定位文件。</p>
+            : <button type="button" onClick={() => void reveal(selected)}>在文件夹中显示</button>}
+          {!selected.directory && !selected.cached && <MotwInfo drive={selected.drive} fileId={selected.id} />}
         </section>}
     </section>}
     {error && <p className="error" role="alert">{error}</p>}

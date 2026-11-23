@@ -190,19 +190,33 @@ class NtfsCatalog {
     if (!text) return [];
     const needle = text.split(/[/\\]/).at(-1);
     if (!needle) return [];
+    const upper = needle + "\uffff";
+    const pathQuery = /[/\\]/.test(text) ? 1 : 0;
+    const normalized = text.replaceAll("/", "\\");
     if (needle.length < 2) {
       return this.db.prepare(`
         SELECT i.id, i.name, p.path AS directory, i.directory AS isDirectory
         FROM ntfs_item i JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
         WHERE i.drive = ? AND i.folded >= ? AND i.folded < ? LIMIT 100
-      `).all(drive, needle, needle + "\uffff");
+      `).all(drive, needle, upper);
     }
-    return this.db.prepare(`
+    // Common prefix matches use ntfs_item_name's B-tree index before a general substring scan.
+    const prefixMatches = this.db.prepare(`
+      SELECT i.id, i.name, p.path AS directory, i.directory AS isDirectory
+      FROM ntfs_item i JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
+      WHERE i.drive = ? AND i.folded >= ? AND i.folded < ?
+      AND (? = 0 OR instr(rtrim(p.folded, '\\') || '\\' || i.folded, ?) > 0) LIMIT 100
+    `).all(drive, needle, upper, pathQuery, normalized);
+    if (prefixMatches.length >= 100) return prefixMatches;
+    const remaining = this.db.prepare(`
       SELECT i.id, i.name, p.path AS directory, i.directory AS isDirectory
       FROM ntfs_item i JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
       WHERE i.drive = ? AND instr(i.folded, ?) > 0
-      AND (? = 0 OR instr(rtrim(p.folded, '\\') || '\\' || i.folded, ?) > 0) LIMIT 100
-    `).all(drive, needle, /[/\\]/.test(text) ? 1 : 0, text.replaceAll("/", "\\"));
+      AND (i.folded < ? OR i.folded >= ?)
+      AND (? = 0 OR instr(rtrim(p.folded, '\\') || '\\' || i.folded, ?) > 0)
+      LIMIT ?
+    `).all(drive, needle, needle, upper, pathQuery, normalized, 100 - prefixMatches.length);
+    return [...prefixMatches, ...remaining];
   }
 
   close() { this.db.close(); }

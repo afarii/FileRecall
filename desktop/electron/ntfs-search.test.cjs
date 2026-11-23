@@ -78,3 +78,41 @@ test("NTFS resumes changes, moves directory descendants and rebuilds if the jour
   assert.deepEqual(service.status().drives, []);
   assert.equal(reader.closed, true);
 });
+
+test("cached NTFS names remain searchable before UAC reconnect, while live file actions remain gated", async (t) => {
+  const { mkdtemp, rm } = require("node:fs/promises");
+  const { tmpdir } = require("node:os");
+  const { join } = require("node:path");
+  const home = await mkdtemp(join(tmpdir(), "filerecall-ntfs-cache-test-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const database = join(home, "ntfs.sqlite");
+  const reader = {
+    closed: false,
+    close() { this.closed = true; },
+    async request(type, _drive, _volume, _journal, cursor) {
+      if (type === "probe") return { volume: testVolume, journal: "77", first: "0", next: "9" };
+      if (type === "enum") return cursor === "0"
+        ? { next: "9", rows: [row("101", "5", "D:\\Synthetic", "sample-report.txt")] }
+        : { end: true };
+      return { next: "9", rows: [] };
+    },
+  };
+  const options = {
+    createReader: async () => reader, onChange() {}, onPaths: async () => {},
+    onActiveDrives() {},
+  };
+  const first = new NtfsSearch(database, "D:\\AppData", "", options);
+  await first.enable("D");
+  await first.tail;
+  assert.equal(first.search("report")[0].cached, false);
+  await first.close();
+  const offline = new NtfsSearch(database, "D:\\AppData", "", {
+    ...options, createReader: async () => { throw new Error("should not launch UAC for cached search"); },
+  });
+  t.after(() => offline.close());
+  assert.equal(offline.status().connected, false);
+  const [result] = offline.search("report");
+  assert.equal(result.cached, true);
+  assert.equal(result.path, "D:\\Synthetic\\sample-report.txt");
+  assert.equal(offline.target("D", "101"), null);
+});

@@ -115,6 +115,7 @@ interface NtfsResult {
   path: string;
   name: string;
   directory: boolean;
+  cached?: boolean;
 }
 
 interface Window {

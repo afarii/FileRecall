@@ -246,12 +246,16 @@ class NtfsSearch {
 
   search(rawQuery) {
     const query = typeof rawQuery === "string" ? rawQuery.trim().slice(0, 200) : "";
-    if (!query || !this.reader || this.reader.closed) return [];
+    if (!query) return [];
     const matches = [];
-    for (const [drive, state] of this.sessions) {
-      if (state.phase !== "ready") continue;
+    for (const driveEntry of this.catalog.drives()) {
+      const { drive } = driveEntry;
+      const live = Boolean(this.reader && !this.reader.closed && this.sessions.get(drive)?.phase === "ready");
+      const cached = Boolean(!this.sessions.has(drive) && driveEntry.cursor && (!this.reader || this.reader.closed));
+      if (!live && !cached) continue;
       matches.push(...this.catalog.search(drive, query).map((row) => ({
-        id: row.id, drive, path: fullPath(row), name: row.name, directory: Boolean(row.isDirectory),
+        id: row.id, drive, path: fullPath(row), name: row.name,
+        directory: Boolean(row.isDirectory), cached,
       })));
       if (matches.length >= 100) break;
     }
