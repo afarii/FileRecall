@@ -12,6 +12,7 @@ function createPerformanceDiagnostics(userData, { intervalMs = 10000 } = {}) {
   let lastUtil = performance.eventLoopUtilization();
   let recent = [];
   let latestNtfs = {};
+  const searchTimes = { local: [], ntfs: [], "ntfs-deep": [] };
   let lastRendererLag = 0;
   let writes = Promise.resolve();
   let stopped = false;
@@ -33,6 +34,12 @@ function createPerformanceDiagnostics(userData, { intervalMs = 10000 } = {}) {
     });
   }
 
+  function percentile(values, fraction) {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    return safeNumber(sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)], 60000);
+  }
+
   function sample() {
     if (stopped) return;
     const elapsed = Math.max(1, performance.now() - lastElapsed);
@@ -49,12 +56,18 @@ function createPerformanceDiagnostics(userData, { intervalMs = 10000 } = {}) {
       processCpuPctOfOneCore: safeNumber(((cpu.user + cpu.system) / 1000) / elapsed * 100, 100000),
       processRssMiB: safeNumber(process.memoryUsage().rss / 1048576),
       rendererLagMs: safeNumber(lastRendererLag, 60000),
+      localSearchP95Ms: percentile(searchTimes.local, 0.95),
+      ntfsSearchP95Ms: percentile(searchTimes.ntfs, 0.95),
+      deepSearchP95Ms: percentile(searchTimes["ntfs-deep"], 0.95),
+      localSearchCount: searchTimes.local.length,
+      ntfsSearchCount: searchTimes.ntfs.length,
       ntfsLoopP95Ms: safeNumber(latestNtfs.ntfsLoopP95Ms ?? 0, 60000),
       ntfsLoopMaxMs: safeNumber(latestNtfs.ntfsLoopMaxMs ?? 0, 60000),
       ntfsActiveScanCount: Array.isArray(latestNtfs.scanStates)
         ? latestNtfs.scanStates.filter((s) => s.phase === "building" || s.phase === "catching-up").length : 0,
     };
     lastRendererLag = 0;
+    for (const times of Object.values(searchTimes)) times.length = 0;
     histogram.reset();
     recent.push(record);
     if (recent.length > 24) recent.shift();
@@ -65,6 +78,12 @@ function createPerformanceDiagnostics(userData, { intervalMs = 10000 } = {}) {
   return {
     file: logFile,
     setNtfsMetrics: (metrics) => { latestNtfs = metrics && typeof metrics === "object" ? metrics : {}; },
+    recordSearch: (kind, durationMs) => {
+      const times = searchTimes[kind];
+      if (!times || !Number.isFinite(durationMs)) return;
+      if (times.length >= 1000) times.shift();
+      times.push(safeNumber(durationMs, 60000));
+    },
     recordRendererLag: (lag) => {
       if (typeof lag === "number") lastRendererLag = Math.max(lastRendererLag, safeNumber(lag, 60000));
     },
