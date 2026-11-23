@@ -27,8 +27,11 @@ export default function NtfsQuickResults({ query, enabled, onResults }: {
 
   useEffect(() => {
     let active = true;
-    onResults({ query, files: [] });
-    if (!enabled || !query.trim()) return;
+    if (!enabled || !query.trim()) {
+      onResults({ query, files: [] });
+      return;
+    }
+    // Retain the previous matching rows during incremental NTFS status refreshes.
     const timer = window.setTimeout(() => {
       void window.fileRecall.searchNtfs(query).then((files) => {
         if (active) onResults({ query, files });
