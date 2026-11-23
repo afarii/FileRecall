@@ -68,7 +68,7 @@ class NtfsSearch {
   notify() {
     if (this.closed) return;
     const status = this.status();
-    this.onActiveDrives(status.connected ? status.drives.filter(({ phase }) => phase === "ready").map(({ drive }) => drive) : []);
+    this.onActiveDrives(status.connected ? status.drives.filter(({ phase }) => phase === "ready" || phase === "building").map(({ drive }) => drive) : []);
     this.onChange(status);
   }
 
@@ -295,7 +295,7 @@ class NtfsSearch {
     const matches = [];
     for (const driveEntry of this.catalog.drives()) {
       const { drive } = driveEntry;
-      const live = Boolean(this.reader && !this.reader.closed && this.sessions.get(drive)?.phase === "ready");
+      const live = Boolean(this.reader && !this.reader.closed && ["ready", "building"].includes(this.sessions.get(drive)?.phase));
       const cached = Boolean(!this.sessions.has(drive) && driveEntry.cursor && (!this.reader || this.reader.closed));
       if (!live && !cached) continue;
       matches.push(...this.catalog.search(drive, query).map((row) => ({
@@ -310,7 +310,7 @@ class NtfsSearch {
   target(value, id) {
     const drive = driveLetter(value);
     if (typeof id !== "string" || !/^\d{1,20}$/.test(id) || this.reader?.closed !== false ||
-        this.sessions.get(drive)?.phase !== "ready") return null;
+        !["ready", "building"].includes(this.sessions.get(drive)?.phase)) return null;
     return fullPath(this.catalog.item(drive, id)) ?? null;
   }
 
