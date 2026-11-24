@@ -529,6 +529,64 @@ class FileIndex {
 
   // Legacy favorites remain in the metadata database. This read is bounded
   // by actual annotations, without requiring the old filename search index.
+  // Point lookup for a file found by the NTFS primary name index. Data here is
+  // only provenance/annotation/history; searching filenames belongs to MFT.
+  metadataAtPath(path) {
+    this._metadataAtPath ??= this.db.prepare(`
+      SELECT files.path, files.root_path AS rootPath, files.name, files.size,
+        files.modified_at AS modifiedAt, files.first_seen_at AS firstSeenAt,
+        files.last_seen_at AS lastSeenAt, files.status,
+        ${CURRENT_PATH} AS currentPath, ${POSSIBLE_PATH} AS possiblePath,
+        coalesce(a.favorite, 0) AS favorite, 0 AS textMatched,
+        0 AS annotationMatched, 5 AS matchRank,
+        coalesce(u.use_count, 0) AS useCount, coalesce(u.last_used_at, 0) AS lastUsedAt
+      FROM files
+      LEFT JOIN file_annotations a ON a.file_identity = files.file_identity
+        AND files.identity_verified = 1
+      LEFT JOIN file_usage u ON u.file_key = CASE
+        WHEN files.identity_verified = 1 AND files.file_identity IS NOT NULL
+        THEN 'id:' || files.file_identity ELSE 'path:' || files.path END
+      WHERE files.path = ? LIMIT 1
+    `);
+    return this._metadataAtPath.get(path) ?? null;
+  }
+
+  // Search old records only for *metadata* that the MFT cannot answer:
+  // disappeared files, user-written notes/tags, and optional document text.
+  // Existing records stay in-place across upgrade; no destructive migration.
+  searchAuxiliary(query) {
+    const terms = queryTerms(String(query || "").trim().slice(0, 200));
+    if (!terms.length) return this.searchFavorites("");
+    const nameTerm = "(instr(lower(files.name), ?) > 0 OR instr(lower(files.path), ?) > 0" +
+      " OR instr(coalesce(files.name_pinyin, ''), ?) > 0 OR instr(coalesce(files.name_initials, ''), ?) > 0)";
+    const nameWhere = terms.map(() => nameTerm).join(" AND ");
+    const noteWhere = terms.map(() => "instr(coalesce(a.search_text, ''), ?) > 0").join(" AND ");
+    const text = this.textEnabled();
+    const textWhere = terms.map(() => "instr(coalesce(t.content, ''), ?) > 0").join(" AND ");
+    const sql = `SELECT files.path, CASE WHEN a.search_text IS NOT NULL AND (${noteWhere}) THEN 1 ELSE 0 END AS noteMatched,
+      ${text ? `CASE WHEN t.content IS NOT NULL AND (${textWhere}) THEN 1 ELSE 0 END` : "0"} AS contentMatched
+      FROM files
+      LEFT JOIN file_annotations a ON a.file_identity = files.file_identity
+        AND files.identity_verified = 1
+      ${text ? "LEFT JOIN file_text t ON t.path = files.path" : ""}
+      WHERE (files.status = 'missing' AND (${nameWhere}))
+        OR (a.search_text IS NOT NULL AND (${noteWhere}))
+        ${text ? `OR (t.content IS NOT NULL AND (${textWhere}))` : ""}
+      LIMIT 200`;
+    const noteArgs = terms.map((term) => term.toLowerCase());
+    const textArgs = terms.map((term) => term.toLowerCase());
+    const names = terms.flatMap((term) => [term, term, term, term]);
+    const parameters = [...noteArgs, ...(text ? textArgs : []),
+      ...names, ...noteArgs, ...(text ? textArgs : [])];
+    return this.db.prepare(sql).all(...parameters).map((row) => {
+      const file = this.metadataAtPath(row.path);
+      if (!file) return null;
+      file.annotationMatched = row.noteMatched;
+      file.textMatched = row.contentMatched;
+      return file;
+    }).filter(Boolean);
+  }
+
   searchFavorites(query = "") {
     const normalized = String(query).trim().toLowerCase();
     const rows = this.db.prepare(`
