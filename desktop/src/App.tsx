@@ -465,7 +465,7 @@ export default function App() {
           {!semanticMode && historyRecords.length > 0 && <>
             {currentRecords.length > 0 && <button type="button"
               className="secondary history-toggle" aria-expanded={historyVisible}
-              onClick={() => { setShowHistory((previous) => !previous); setExpandedResults(false); }}>
+              onClick={() => { setShowHistory((previous) => !previous); setExpandedResults(false); setSelected(null); }}>
               {historyVisible ? "收起历史记录" : "查看 " + historyRecords.length + " 条相关下载与历史记录"}
               <span aria-hidden="true">{historyVisible ? "⌃" : "⌄"}</span>
             </button>}
