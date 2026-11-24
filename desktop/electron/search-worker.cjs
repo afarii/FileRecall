@@ -49,9 +49,9 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
         : localReader().search(query);
       const catalog = ntfsReader();
       const matches = catalog ? list.flatMap(({ drive, cached }) => {
-        const rows = !query.trim() && favoritesOnly
-          ? catalog.favorites(drive)
-          : query.trim() ? catalog.search(drive, query, { fastOnly: true }) : [];
+        const rows = !query.trim()
+          ? favoritesOnly ? catalog.favorites(drive) : catalog.recent(drive)
+          : catalog.search(drive, query, { fastOnly: true });
         return rows.map((row) => ({
           id: row.id, drive, name: row.name, path: fullPath(row),
           directory: Boolean(row.isDirectory), cached,
