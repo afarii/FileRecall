@@ -33,6 +33,7 @@ function respond(id, action, args = []) {
       case "disable": return service.disable(args[0]);
       case "target": return service.target(args[0], args[1]);
       case "recordUse": service.catalog.recordUse(args[0], args[1]); return true;
+      case "favorite": return service.catalog.favorite(args[0], args[1], args[2]);
       case "trackedDrives": service.trackedDrives = new Set(args[0]); return true;
       case "status": return read();
       case "close":
