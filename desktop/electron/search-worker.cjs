@@ -44,9 +44,18 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
       files = localReader().search(query);
     } else if (kind === "unified") {
       const list = Array.isArray(drives) ? drives : [];
-      const metadata = favoritesOnly
-        ? localReader().searchFavorites(query)
-        : localReader().search(query);
+      const source = localReader();
+      const indexedDrives = new Set(list.map(({ drive }) => drive));
+      const hasUncoveredRoots = source.roots().some(({ path }) => {
+        const volume = /^([a-z]):\\\\/i.exec(path)?.[1]?.toUpperCase();
+        return !volume || !indexedDrives.has(volume);
+      });
+      // The legacy filename engine is now a compatibility fallback only.
+      // On NTFS-only installs, query note/history/text metadata plus point
+      // lookups for MFT hits; never perform a second full filename search.
+      const metadata = favoritesOnly ? source.searchFavorites(query)
+        : list.length && !hasUncoveredRoots ? source.searchAuxiliary(query)
+          : source.search(query);
       const catalog = ntfsReader();
       const matches = catalog ? list.flatMap(({ drive, cached }) => {
         const rows = !query.trim()
@@ -59,9 +68,21 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
           lastUsedAt: row.lastUsedAt || 0, matchScore: row.matchScore || 0,
         }));
       }) : [];
+      // Attach source evidence and annotations by path without querying
+      // the legacy filename index. Preserve old identity-verified paths.
+      const metadataByPath = new Map(metadata.map((file) =>
+        [String(file.currentPath || file.path).toLowerCase(), file]));
+      for (const file of matches) {
+        const key = file.path.toLowerCase();
+        if (metadataByPath.has(key)) continue;
+        const details = source.metadataAtPath(file.path);
+        if (details) {
+          metadataByPath.set(key, details);
+        }
+      }
       files = mergeFileSearch({
         query, favoritesOnly: Boolean(favoritesOnly),
-        localFiles: metadata, ntfsFiles: matches, drives: list,
+        localFiles: [...metadataByPath.values()], ntfsFiles: matches, drives: list,
       });
     } else if (kind === "ntfs" || kind === "ntfs-deep") {
       const catalog = ntfsReader();
