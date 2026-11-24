@@ -2,8 +2,27 @@ import { useState } from "react";
 import { FileTile } from "./FileDetails";
 import MotwInfo from "./MotwInfo";
 
-export default function NtfsDetails({ file, onClose }: { file: NtfsResult; onClose: () => void }) {
+export default function NtfsDetails({ file, onClose, onFavoriteChanged }: {
+  file: NtfsResult; onClose: () => void; onFavoriteChanged: () => void;
+}) {
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const favorite = Boolean((file as NtfsResult & { favorite?: number }).favorite);
+  async function toggleFavorite() {
+    setSaving(true);
+    setError("");
+    try {
+      const api = window.fileRecall as typeof window.fileRecall & {
+        favoriteNtfs: (drive: string, id: string, enabled: boolean) => Promise<boolean>;
+      };
+      if (!await api.favoriteNtfs(file.drive, file.id, !favorite)) {
+        setError("收藏失败，请刷新文件索引后重试。");
+      } else {
+        onFavoriteChanged();
+      }
+    } catch { setError("收藏操作失败。"); }
+    finally { setSaving(false); }
+  }
   async function reveal() {
     setError("");
     try {
@@ -21,6 +40,10 @@ export default function NtfsDetails({ file, onClose }: { file: NtfsResult; onClo
       <FileTile name={file.name} />
       <div><h2>{file.name}</h2><span className="muted">{file.directory ? "文件夹" : "本地文件"}</span></div>
     </div>
+    <section className="detail-section">
+      <button className="secondary" type="button" disabled={saving}
+        onClick={() => void toggleFavorite()}>{favorite ? "★ 取消收藏" : "☆ 收藏文件"}</button>
+    </section>
     <section className="detail-section">
       <h3>文件位置</h3>
       <p>{file.path}</p>
