@@ -346,6 +346,21 @@ class NtfsCatalog {
     });
   }
 
+  recent(drive, limit = 60) {
+    const rows = this.db.prepare(`SELECT i.id, i.parent, i.name, i.folded, i.pinyin, i.initials,
+      p.path AS directory, i.directory AS isDirectory, u.use_count AS useCount,
+      u.last_used_at AS lastUsedAt, u.favorite AS favorite
+      FROM ntfs_usage u CROSS JOIN ntfs_item i ON i.drive = u.drive AND i.id = u.id
+      LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
+      WHERE u.drive = ? AND (u.use_count > 0 OR u.favorite = 1)
+      ORDER BY u.favorite DESC, u.use_count DESC, u.last_used_at DESC LIMIT ?`).all(drive, limit);
+    return rows.filter((row) => {
+      row.directory ??= this.resolveParent(drive, row.parent);
+      const path = fullPath(row)?.toLowerCase();
+      return path && path !== this.applicationData && !below(path, this.applicationData);
+    });
+  }
+
   search(drive, query, { fastOnly = false } = {}) {
     const terms = queryTerms(query);
     if (!terms.length) return [];
