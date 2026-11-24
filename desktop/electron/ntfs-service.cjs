@@ -2,9 +2,9 @@
 const { Worker } = require("node:worker_threads");
 const { join } = require("node:path");
 
-function createNtfsService(database, userData, executable, { onChange, onPaths, onActiveDrives, onMetrics = () => {} }) {
+function createNtfsService(database, userData, executable, { onChange, onPaths, onActiveDrives, onMetrics = () => {}, trackedDrives }) {
   const worker = new Worker(join(__dirname, "ntfs-worker.cjs"), {
-    workerData: { database, userData, executable },
+    workerData: { database, userData, executable, trackedDrives },
   });
   worker.unref();
   let state = { available: true, autoPhase: "idle", connected: false, drives: [] };
@@ -84,6 +84,7 @@ function createNtfsService(database, userData, executable, { onChange, onPaths, 
     disable: (drive) => invoke("disable", drive),
     target: (drive, id) => invoke("target", drive, id),
     recordUse: (drive, id) => invoke("recordUse", drive, id),
+    setTrackedDrives: (drives) => invoke("trackedDrives", drives),
     async close() {
       try { await invoke("close"); } catch {}
       finish(new Error("NTFS 索引工作线程已关闭"));
