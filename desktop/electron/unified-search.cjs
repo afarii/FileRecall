@@ -28,7 +28,7 @@ function mergeFileSearch({ query, favoritesOnly = false, localFiles = [], ntfsFi
       // Reuse existing identity-backed details (source, notes, status).
       // The NTFS record supplies the authoritative filename and ranking.
       byPath.set(key, { type: "local", file: {
-        ...metadata, name: file.name, path: file.path,
+        ...metadata, name: file.name, // Preserve original metadata path for identity-backed provenance.
         matchScore: file.matchScore,
         useCount: Math.max(metadata.useCount || 0, file.useCount || 0),
         favorite: Number(Boolean(metadata.favorite || file.favorite)),
