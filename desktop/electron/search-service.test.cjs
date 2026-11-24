@@ -8,6 +8,7 @@ const { join } = require("node:path");
 const { FileIndex } = require("./indexer.cjs");
 const { NtfsCatalog } = require("./ntfs-catalog.cjs");
 const { createSearchService } = require("./search-service.cjs");
+const { DownloadSources } = require("./download-sources.cjs");
 
 test("worker searches local and NTFS catalogs while main thread writes usage", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "filerecall-search-worker-"));
@@ -58,4 +59,36 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
   assert.deepEqual(quick, [], "indexed hot path skips whole-volume substring scans");
   const deep = await search.searchNtfsDeep("report", [{ drive: "E", cached: false }]);
   assert.equal(deep[0].name, "sample-report.txt", "separate worker preserves substring fallback");
+});
+
+test("slow download-source results run in their own worker and are searchable by website", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "filerecall-recovery-"));
+  const localDatabase = join(root, "files.sqlite");
+  const downloadsDatabase = join(root, "browser-downloads.sqlite");
+  const local = new FileIndex(localDatabase);
+  const sources = new DownloadSources(downloadsDatabase);
+  const item = {
+    key: "download:42", startedAt: 1760000000000, path: "D:\\Downloads\\old.pdf",
+    algorithm: { status: "candidate", url: "https://example.org/course", title: "课程资料" },
+    effective: { status: "confirmed", url: "https://example.org/course", title: "课程资料" },
+  };
+  sources.importBatch({
+    version: 1, profile: "12345678-1234-1234-1234-123456789abc", records: [item],
+  });
+  const search = createSearchService({
+    localDatabase, ntfsDatabase: null, downloadsDatabase, applicationData: root,
+  });
+  t.after(async () => {
+    await search.close();
+    sources.close();
+    local.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const bySite = await search.searchDownloads("example.org");
+  assert.equal(bySite.length, 1);
+  assert.equal(bySite[0].name, "old.pdf");
+  assert.equal(bySite[0].canOpenSource, true);
+  assert.equal((await search.searchDownloads("missingkeyword")).length, 0);
+  // The primary filename worker remains independently usable.
+  assert.deepEqual(await search.searchUnified("old", []), []);
 });
