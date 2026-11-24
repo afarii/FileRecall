@@ -310,13 +310,13 @@ export default function App() {
     const filenameRecords: UnifiedRecord[] = semanticMode
       ? (semanticResult?.files ?? []).map((file): UnifiedRecord => ({ type: "local", file }))
       : (matched?.files ?? []);
-    const presentPaths = new Set(filenameRecords.filter((record) =>
-      record.type === "ntfs" || (record.type === "local" &&
-        (record.file.status === "present" || Boolean(record.file.currentPath))))
-      .map((record) => (record.type === "local" ? record.file.currentPath || record.file.path : record.file.path)
-        .replaceAll("/", "\\").toLowerCase()));
+    // A matched file record already carries its own provenance context.
+    // Suppress a second download-only row for the same current or historical path.
+    const knownPaths = new Set(filenameRecords.flatMap((record) =>
+      record.type === "local" ? [record.file.path, record.file.currentPath].filter((path): path is string => Boolean(path))
+        : [record.file.path]).map((path) => path.replaceAll("/", "\\").toLowerCase()));
     const downloads = downloadRecords.filter((record) =>
-      record.type === "download" && !presentPaths.has(record.file.path.replaceAll("/", "\\").toLowerCase()));
+      record.type === "download" && !knownPaths.has(record.file.path.replaceAll("/", "\\").toLowerCase()));
     const current: UnifiedRecord[] = [];
     const history: UnifiedRecord[] = [];
     for (const record of [...filenameRecords, ...downloads]) {
