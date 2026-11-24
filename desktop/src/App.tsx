@@ -128,6 +128,22 @@ export default function App() {
     return () => { if (timer !== undefined) window.clearTimeout(timer); unsubscribe(); };
   }, [reload, refreshFolders, mode, view]);
 
+  // New MFT snapshots and a restored cached volume should become searchable
+  // without waiting for the next keystroke. Coalesce frequent index updates.
+  useEffect(() => {
+    let timer: number | undefined;
+    const unsubscribe = window.fileRecall.onNtfsChanged(() => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (mode === "literal") void reload(currentQuery.current).catch(() => {});
+      }, 400);
+    });
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [mode, reload]);
+
   useEffect(() => { setExpandedResults(false); }, [searchQuery, filter]);
 
   useEffect(() => {
