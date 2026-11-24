@@ -71,6 +71,7 @@ export default function App() {
   }, []);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedResults, setExpandedResults] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => setSearchQuery(query), query.trim() ? 25 : 0);
     return () => window.clearTimeout(timer);
@@ -144,7 +145,7 @@ export default function App() {
     };
   }, [mode, reload]);
 
-  useEffect(() => { setExpandedResults(false); }, [searchQuery, filter]);
+  useEffect(() => { setExpandedResults(false); setShowHistory(false); }, [searchQuery, filter]);
 
   useEffect(() => {
     window.fileRecall.textEnabled().then(setTextEnabled).catch(() => setError("无法读取正文搜索设置。"));
@@ -305,19 +306,37 @@ export default function App() {
   const downloadRecords: SearchRecord[] = useMemo(() => (semanticMode || localOnly ||
     (!searchQuery.trim() && filter === "all") ? [] : (browser?.files ?? []))
     .map((file): SearchRecord => ({ type: "download", file })), [browser, semanticMode, localOnly, filter, searchQuery]);
-  const allRecords: UnifiedRecord[] = useMemo(() => {
+  const { currentRecords, historyRecords } = useMemo(() => {
     const filenameRecords: UnifiedRecord[] = semanticMode
       ? (semanticResult?.files ?? []).map((file): UnifiedRecord => ({ type: "local", file }))
       : (matched?.files ?? []);
-    const merged: UnifiedRecord[] = [...filenameRecords, ...downloadRecords];
-    if (!semanticMode) merged.sort((a, b) => relevance(b, searchQuery) - relevance(a, searchQuery));
-    return merged;
+    const presentPaths = new Set(filenameRecords.filter((record) =>
+      record.type === "ntfs" || (record.type === "local" &&
+        (record.file.status === "present" || Boolean(record.file.currentPath))))
+      .map((record) => (record.type === "local" ? record.file.currentPath || record.file.path : record.file.path)
+        .replaceAll("/", "\\").toLowerCase()));
+    const downloads = downloadRecords.filter((record) =>
+      record.type === "download" && !presentPaths.has(record.file.path.replaceAll("/", "\\").toLowerCase()));
+    const current: UnifiedRecord[] = [];
+    const history: UnifiedRecord[] = [];
+    for (const record of [...filenameRecords, ...downloads]) {
+      const historical = record.type === "local"
+        ? record.file.status === "missing" && !record.file.currentPath
+        : record.type === "download" ? record.file.pathStatus !== "present" : false;
+      (historical ? history : current).push(record);
+    }
+    if (!semanticMode) {
+      current.sort((a, b) => relevance(b, searchQuery) - relevance(a, searchQuery));
+      history.sort((a, b) => relevance(b, searchQuery) - relevance(a, searchQuery));
+    }
+    return { currentRecords: current, historyRecords: history };
   }, [semanticMode, semanticResult, matched, downloadRecords, searchQuery]);
+  const historyVisible = showHistory || currentRecords.length === 0;
+  const allRecords = useMemo(() => [...currentRecords, ...historyRecords], [currentRecords, historyRecords]);
   const selectedRecord = allRecords.find((record) => unifiedKey(record) === selected);
   const hasResults = allRecords.length > 0;
-  const expectsDownloads = !semanticMode && !localOnly &&
-    (Boolean(searchQuery.trim()) || filter !== "all");
-  const loading = (!error && !matched) || (expectsDownloads && !browser);
+  // The fast filename results render before the slower download/history enrichment completes.
+  const loading = !error && !matched;
   const pastFolders = historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path));
 
   function renderRecords(records: UnifiedRecord[], title: string) {
@@ -438,7 +457,16 @@ export default function App() {
           {!semanticMode && !hasResults && loading && <p className="empty" role="status">正在搜索…</p>}
           {!semanticMode && !hasResults && !loading && <p className="empty">{searchQuery.trim() || filter !== "all"
             ? "没有找到匹配的记录。" : "输入文件名、拼音或来源即可开始搜索。常用文件会显示在这里。"}</p>}
-          {renderRecords(allRecords, semanticMode ? "相近内容" : "搜索结果")}
+          {renderRecords(currentRecords, semanticMode ? "相近内容" : "搜索结果")}
+          {!semanticMode && historyRecords.length > 0 && <>
+            {currentRecords.length > 0 && <button type="button"
+              className="secondary history-toggle" aria-expanded={historyVisible}
+              onClick={() => { setShowHistory((previous) => !previous); setExpandedResults(false); }}>
+              {historyVisible ? "收起历史记录" : "查看 " + historyRecords.length + " 条相关下载与历史记录"}
+              <span aria-hidden="true">{historyVisible ? "⌃" : "⌄"}</span>
+            </button>}
+            {historyVisible && renderRecords(historyRecords, "历史与找回")}
+          </>}
           <NtfsQuickResults enabled={!semanticMode} />
         </section>
         {selectedRecord && (selectedRecord.type === "ntfs"
