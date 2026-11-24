@@ -47,6 +47,8 @@ class NtfsCatalog {
     if (!columns.has("initials")) this.db.exec("ALTER TABLE ntfs_item ADD COLUMN initials TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_item_pinyin ON ntfs_item(drive, pinyin)");
     this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_item_initials ON ntfs_item(drive, initials)");
+    // A tiny partial index prevents a complete MFT scan on every migration tick.
+    this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_missing_keys ON ntfs_item(drive, id) WHERE pinyin IS NULL OR initials IS NULL");
     this.db.exec(`CREATE TABLE IF NOT EXISTS ntfs_usage (
       drive TEXT NOT NULL, id TEXT NOT NULL,
       use_count INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0,
@@ -258,7 +260,7 @@ class NtfsCatalog {
         // Same transaction as the rows: crash recovery resumes at an exact MFT cursor.
         this.db.prepare("UPDATE ntfs_drive SET build_position = ? WHERE drive = ?").run(cursor, drive);
       }
-      if (changed && !snapshot && cursor !== undefined) this.checkpoint(drive, journal, cursor);
+      if (!snapshot && cursor !== undefined) this.checkpoint(drive, journal, cursor);
     });
   }
 
@@ -295,7 +297,7 @@ class NtfsCatalog {
 
   backfillSearchKeys(limit = 300) {
     const rows = this.db.prepare(
-      "SELECT drive, id, name FROM ntfs_item WHERE pinyin IS NULL OR initials IS NULL LIMIT ?"
+      "SELECT drive, id, name FROM ntfs_item INDEXED BY ntfs_missing_keys WHERE pinyin IS NULL OR initials IS NULL LIMIT ?"
     ).all(limit);
     if (!rows.length) return 0;
     this.transaction(() => {
@@ -381,7 +383,7 @@ class NtfsCatalog {
     // This keeps familiar files visible even when a short prefix matches thousands of system files.
     const usedFilters = filters(terms);
     const frequent = this.db.prepare(columns +
-      " FROM ntfs_usage u JOIN ntfs_item i ON i.drive = u.drive AND i.id = u.id" +
+      " FROM ntfs_usage u CROSS JOIN ntfs_item i ON i.drive = u.drive AND i.id = u.id" +
       " LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent" +
       " WHERE u.drive = ? AND " + usedFilters.where +
       " ORDER BY u.use_count DESC, u.last_used_at DESC LIMIT 40")
@@ -395,17 +397,21 @@ class NtfsCatalog {
         : ["i.folded", "i.pinyin", "i.initials"]) : ["i.folded"];
     for (const column of columnsToTry) {
       if (results.length >= 100) break;
-      const sql = columns + " " + from + " WHERE i.drive = ? AND " +
-        column + " >= ? AND " + column + " < ? AND " + others.where +
-        " LIMIT ?";
+      const index = { "i.folded": "ntfs_item_name", "i.initials": "ntfs_item_initials", "i.pinyin": "ntfs_item_pinyin" }[column];
+      // Materialize a bounded indexed range BEFORE joins and secondary filters.
+      // Otherwise SQLite can choose a drive-wide scan on a broad prefix,
+      // especially when its statistics do not reflect a large MFT catalog.
+      const key = column.slice(2);
+      const sql = "WITH candidates AS MATERIALIZED (SELECT * FROM ntfs_item INDEXED BY " + index +
+        " WHERE drive = ? AND " + key + " >= ? AND " + key + " < ? LIMIT ?) " +
+        columns + " " + from.replace("ntfs_item i", "candidates i") +
+        " WHERE " + others.where + " LIMIT ?";
       const matches = this.db.prepare(sql).all(drive, primary, upper,
-        ...others.args, 100 - results.length);
+        fastOnly ? 768 : 8192, ...others.args, 100 - results.length);
       collect(matches);
     }
     // Short initials such as "sy" are handled by indexed prefix scans. Avoid an
     // O(entire disk) infix scan on each keystroke while an input is still changing.
-    if (results.length >= 100 || primary.length <= 2 || results.length >= 40) return rank(results);
-
     // The UI's fast path never performs an entire-volume substring scan.
     // Keep the complete scan available for explicit deep search and the
     // compatibility API, without putting it on the keystroke hot path.
