@@ -7,10 +7,13 @@ export default function NtfsQuickResults({ query, enabled, onResults }: {
 }) {
   const [status, setStatus] = useState<NtfsStatus>();
   const [revision, setRevision] = useState(0);
+  const [reconnecting, setReconnecting] = useState(false);
   useEffect(() => {
     let active = true;
     let refreshTimer: number | undefined;
     const unsubscribe = window.fileRecall.onNtfsChanged((value) => {
+      // Ignore unchanged status notifications; indexing progress should not
+      // keep restarting an identical query.
       setStatus(value);
       if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       refreshTimer = window.setTimeout(() => setRevision((prior) => prior + 1), 600);
@@ -47,7 +50,7 @@ export default function NtfsQuickResults({ query, enabled, onResults }: {
             void api.searchNtfsDeep(query).then((deepFiles) => {
               if (active) onResults({ query, files: deepFiles });
             }).catch(() => {});
-          }, 180);
+          }, 350);
         }
       }).catch(() => { if (active) onResults({ query, files: [] }); });
     }, 0);
@@ -59,9 +62,22 @@ export default function NtfsQuickResults({ query, enabled, onResults }: {
   }, [query, enabled, revision, onResults]);
 
   if (!enabled || !query.trim()) return null;
-  const building = status?.drives.some(({ phase }) => phase === "building");
+  const needsHelp = status?.autoPhase === "permission-required" || status?.autoPhase === "error";
+  const paused = status?.drives.filter(({ phase }) => String(phase) === "paused") ?? [];
+  if (!needsHelp && !paused.length) return null;
+  async function recover() {
+    setReconnecting(true);
+    try {
+      // Normally automatic. Offer only one recovery action when the OS
+      // requires user authorization or an old version left disks paused.
+      for (const { drive } of paused) await window.fileRecall.enableNtfs(drive);
+      if (needsHelp) await window.fileRecall.retryAutoNtfs();
+    } finally { setReconnecting(false); }
+  }
   return <div className="search-index-hint" role="status">
-    {building && <span>磁盘索引仍在后台建立，搜索结果会逐步补充。</span>}
-    {status?.autoPhase === "permission-required" && <span>磁盘索引等待授权，可在设置中重新连接。</span>}
+    <button type="button" className="secondary" disabled={reconnecting}
+      onClick={() => void recover().catch(() => {})}>
+      {reconnecting ? "正在连接…" : "恢复全盘文件搜索"}
+    </button>
   </div>;
 }
