@@ -1,5 +1,4 @@
 "use strict";
-const { win32 } = require("node:path");
 
 const keyOf = (file) => String(file.currentPath || file.path).replaceAll("/", "\\").toLowerCase();
 const driveOf = (path) => /^([a-z]):\\/i.exec(path)?.[1]?.toUpperCase() ?? null;
@@ -7,6 +6,7 @@ const driveOf = (path) => /^([a-z]):\\/i.exec(path)?.[1]?.toUpperCase() ?? null;
 function mergeFileSearch({ query, favoritesOnly = false, localFiles = [], ntfsFiles = [], drives = [] }) {
   const indexed = new Set(drives.map(({ drive }) => drive));
   const byPath = new Map();
+  const localByPath = new Map(localFiles.map((file) => [keyOf(file), file]));
   // Preserve metadata, provenance and historical records from the old database.
   // Current NTFS filenames come exclusively from the authoritative MFT catalog.
   for (const file of localFiles) {
@@ -21,13 +21,17 @@ function mergeFileSearch({ query, favoritesOnly = false, localFiles = [], ntfsFi
 
   for (const file of ntfsFiles) {
     const key = keyOf(file);
-    const previous = byPath.get(key);
-    if (favoritesOnly && !file.favorite && !(previous?.file?.favorite)) continue;
-    if (previous && previous.type === "local" && previous.file.status === "present") {
+    const metadata = localByPath.get(key);
+    if (favoritesOnly && !file.favorite && !metadata?.favorite) continue;
+    if (metadata && metadata.status === "present") {
       // Reuse existing identity-backed details (source, notes, status).
-      previous.file.matchScore = file.matchScore;
-      previous.file.useCount = Math.max(previous.file.useCount || 0, file.useCount || 0);
-      previous.file.favorite = Number(Boolean(previous.file.favorite || file.favorite));
+      // The NTFS record supplies the authoritative filename and ranking.
+      byPath.set(key, { type: "local", file: {
+        ...metadata, name: file.name, path: file.path,
+        matchScore: file.matchScore,
+        useCount: Math.max(metadata.useCount || 0, file.useCount || 0),
+        favorite: Number(Boolean(metadata.favorite || file.favorite)),
+      } });
     } else {
       byPath.set(key, { type: "ntfs", file });
     }
