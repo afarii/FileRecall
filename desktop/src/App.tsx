@@ -3,7 +3,6 @@ import ChromeConnection from "./ChromeConnection";
 import Aria2Connection from "./Aria2Connection";
 import HotkeySettings from "./HotkeySettings";
 import DesktopUpdates from "./DesktopUpdates";
-import NtfsPanel from "./NtfsPanel";
 import NtfsQuickResults from "./NtfsQuickResults";
 import NtfsDetails from "./NtfsDetails";
 import PerformanceDiagnostics from "./PerformanceDiagnostics";
@@ -40,7 +39,7 @@ function relevance(record: UnifiedRecord, query: string) {
 }
 
 export default function App() {
-  const [view, setView] = useState<"files" | "folders" | "ntfs" | "settings">("files");
+  const [view, setView] = useState<"files" | "folders" | "settings">("files");
   const [folders, setFolders] = useState<IndexedFolder[]>([]);
   const [historyFolders, setHistoryFolders] = useState<Array<{ path: string; count: number }>>([]);
   const [clearingFolder, setClearingFolder] = useState<string | null>(null);
@@ -49,7 +48,7 @@ export default function App() {
     query: string; files: BrowserDownload[]; manager?: BrowserDownload["manager"]; error?: string;
   }>();
   const [downloadRefresh, setDownloadRefresh] = useState(0);
-  const [filter, setFilter] = useState<"all" | "local" | "chrome" | "aria2" | "missing" | "favorites" | "trusted" | "candidate">("all");
+  const [filter, setFilter] = useState<"all" | "favorites">("all");
   const [selected, setSelected] = useState<string | null>(null);
   const [ntfsResult, setNtfsResult] = useState<{ query: string; files: NtfsResult[] }>();
   const selectedButton = useRef<HTMLButtonElement | null>(null);
@@ -134,8 +133,7 @@ export default function App() {
   }), []);
 
   const refreshDownloads = useCallback(() => setDownloadRefresh((value) => value + 1), []);
-  const downloadManager = filter === "aria2" ? "aria2"
-    : filter === "chrome" || filter === "trusted" || filter === "candidate" ? "chrome" : undefined;
+  const downloadManager = undefined;
 
   useEffect(() => {
     window.addEventListener("focus", refreshDownloads);
@@ -147,7 +145,7 @@ export default function App() {
   useEffect(() => {
     let active = true;
     const timer = window.setTimeout(() => {
-      if (mode === "semantic" || filter === "local" || filter === "favorites" ||
+      if (mode === "semantic" || filter === "favorites" ||
         (!searchQuery.trim() && filter === "all")) return;
       window.fileRecall.downloads(searchQuery, downloadManager).then((files) => {
         if (active) setBrowserResult({ query: searchQuery, files, manager: downloadManager });
@@ -279,25 +277,20 @@ export default function App() {
   const browser = browserResult?.query === searchQuery && browserResult.manager === downloadManager ? browserResult : undefined;
   const semanticMode = mode === "semantic";
   const semanticResult = semantic.result?.query === query ? semantic.result.result : undefined;
-  const downloadsOnly = filter === "chrome" || filter === "aria2" || filter === "trusted" || filter === "candidate";
-  const localOnly = filter === "local" || filter === "favorites";
-  const localFiles = semanticMode ? (semanticResult?.files ?? []) : (downloadsOnly ? [] : (local?.files ?? []));
+  const localOnly = filter === "favorites";
+  const localFiles = semanticMode ? (semanticResult?.files ?? []) : (local?.files ?? []);
   const localRecords: SearchRecord[] = useMemo(() => localFiles
-    .filter((file) => semanticMode || filter !== "missing" || (file.status === "missing" && !file.currentPath))
     .filter((file) => semanticMode || filter !== "favorites" || file.favorite === 1)
     .filter((file) => semanticMode || searchQuery.trim() || file.favorite === 1 ||
       ((file as LocalRanking).useCount ?? 0) > 0)
     .map((file): SearchRecord => ({ type: "local", file })), [localFiles, filter, semanticMode, searchQuery]);
   const downloadRecords: SearchRecord[] = useMemo(() => (semanticMode || localOnly ||
     (!searchQuery.trim() && filter === "all") ? [] : (browser?.files ?? []))
-    .filter((file) => filter !== "missing" || file.pathStatus === "missing")
-    .filter((file) => filter !== "trusted" || (file.manager === "chrome" && file.canOpenSource))
-    .filter((file) => filter !== "candidate" || file.sourceStatus === "candidate")
     .map((file): SearchRecord => ({ type: "download", file })), [browser, semanticMode, localOnly, filter, searchQuery]);
   const allRecords: UnifiedRecord[] = useMemo(() => {
     const localPaths = new Set(localRecords.filter((record) => record.type === "local")
       .map((record) => (record.type === "local" ? record.file.currentPath || record.file.path : "").toLowerCase()));
-    const diskRecords: UnifiedRecord[] = semanticMode || (filter !== "all" && filter !== "local") ||
+    const diskRecords: UnifiedRecord[] = semanticMode || filter !== "all" ||
       ntfsResult?.query !== searchQuery ? [] : ntfsResult.files
       .filter((file) => !localPaths.has(file.path.toLowerCase()))
       .map((file) => ({ type: "ntfs" as const, file }));
@@ -309,7 +302,7 @@ export default function App() {
   const hasResults = allRecords.length > 0;
   const expectsDownloads = !semanticMode && !localOnly &&
     (Boolean(searchQuery.trim()) || filter !== "all");
-  const loading = (!error && !downloadsOnly && !local) || (expectsDownloads && !browser);
+  const loading = (!error && !local) || (expectsDownloads && !browser);
   const pastFolders = historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path));
 
   function renderRecords(records: UnifiedRecord[], title: string) {
@@ -375,7 +368,7 @@ export default function App() {
         <p className="muted">索引和连接在后台运行，需要时再调整。</p>
         <div className="settings-links">
           <button type="button" className="secondary" onClick={() => setView("folders")}>授权目录与正文搜索</button>
-          <button type="button" className="secondary" onClick={() => setView("ntfs")}>磁盘索引管理</button>
+          <button type="button" className="secondary" onClick={() => { setFilter("all"); setMode("semantic"); setView("files"); }}>本地 AI 搜索</button>
         </div>
         <div className="settings-tools">
           <HotkeySettings />
@@ -384,15 +377,9 @@ export default function App() {
           <DesktopUpdates />
           <PerformanceDiagnostics />
         </div>
-      </section> : view === "ntfs" ? <NtfsPanel /> : view === "files" ? <div className={`search-layout ${selectedRecord ? "with-details" : ""}`}>
+      </section> : view === "files" ? <div className={`search-layout ${selectedRecord ? "with-details" : ""}`}>
         <section ref={resultPane} className="search-content" aria-labelledby="search-heading">
           <h1 id="search-heading">搜索文件</h1>
-          <div className="search-modes" role="group" aria-label="搜索方式">
-            <button type="button" className="secondary" aria-pressed={!semanticMode}
-              onClick={() => { setSelected(null); setMode("literal"); }}>字面搜索</button>
-            <button type="button" className="secondary" aria-pressed={semanticMode}
-              onClick={() => { setSelected(null); setMode("semantic"); }}>本地 AI 搜索</button>
-          </div>
           <form className="search-form" onSubmit={(event) => {
             event.preventDefault();
             if (semanticMode && semantic.model?.ready && textEnabled) void semantic.search(query);
@@ -403,7 +390,7 @@ export default function App() {
               <circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 4.4 4.4"/>
             </svg>
             <input type="search" ref={searchInput} aria-label="搜索文件和来源"
-              placeholder={semanticMode ? "用一句话描述你记得的内容" : "文件名、全拼、首字母、扩展名组合或来源，例如 pdf sybg"}
+              placeholder={semanticMode ? "用一句话描述你记得的内容" : "搜索文件名、拼音或来源"}
               value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); setExpandedResults(false); setError(""); }}
               onKeyDown={(event) => {
                 if (event.key !== "ArrowDown") return;
@@ -412,6 +399,8 @@ export default function App() {
               }} />
           </label>
           {semanticMode && <button disabled={semantic.searching || !semantic.model?.ready || !textEnabled || !query.trim()}>搜索</button>}
+          <button type="button" className="secondary" aria-pressed={localOnly} title="仅显示收藏" onClick={() => { setMode("literal"); setFilter(localOnly ? "all" : "favorites"); setSelected(null); }}>{localOnly ? "★ 收藏" : "☆ 收藏"}</button>
+          {semanticMode && <button type="button" className="secondary" onClick={() => setMode("literal")}>普通搜索</button>}
           </form>
           {semanticMode ? <div className="semantic-options">
             {semantic.error && <p className="error" role="alert">{semantic.error}</p>}
@@ -428,24 +417,14 @@ export default function App() {
             {semanticResult && !semanticResult.files.length && <p role="status">{semanticResult.indexed
               ? "未找到足够相关的文件。" : "暂无可用正文，请确认授权目录已完成索引。"}</p>}
             {semanticResult?.truncated && <p className="muted">本次比较了最近索引的 500 份文件。</p>}
-          </div> : <div className="filters" role="group" aria-label="筛选搜索结果">
-            {([["all", "全部"], ["local", "本地文件"], ["favorites", "收藏"], ["missing", "已丢失"],
-              ["chrome", "Chrome"], ["aria2", "Motrix"]] as const)
-              .map(([key, label]) => <button key={key} type="button" aria-pressed={filter === key}
-                onClick={() => { setFilter(key); setSelected(null); }}>{label}</button>)}
-            <details className="filter-more">
-              <summary>更多筛选</summary>
-              <button type="button" aria-pressed={filter === "trusted"} onClick={() => setFilter("trusted")}>可信网页来源</button>
-              <button type="button" aria-pressed={filter === "candidate"} onClick={() => setFilter("candidate")}>来源待核对</button>
-            </details>
-          </div>}
+          </div> : null}
           {error && <p className="error" role="alert">{error}</p>}
           {!semanticMode && browser?.error && !localOnly && <p className="error" role="alert">{browser.error}</p>}
           {!semanticMode && !hasResults && loading && <p className="empty" role="status">正在搜索…</p>}
           {!semanticMode && !hasResults && !loading && <p className="empty">{searchQuery.trim() || filter !== "all"
             ? "没有找到匹配的记录。" : "输入文件名、拼音或来源即可开始搜索。常用文件会显示在这里。"}</p>}
           {renderRecords(allRecords, semanticMode ? "相近内容" : "搜索结果")}
-          <NtfsQuickResults query={searchQuery} enabled={!semanticMode && (filter === "all" || filter === "local")}
+          <NtfsQuickResults query={searchQuery} enabled={!semanticMode && filter === "all"}
             onResults={setNtfsResult} />
         </section>
         {selectedRecord && (selectedRecord.type === "ntfs"
