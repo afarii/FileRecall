@@ -527,6 +527,28 @@ class FileIndex {
       query.toLowerCase(), query.toLowerCase(), ...filters);
   }
 
+  // Legacy favorites remain in the metadata database. This read is bounded
+  // by actual annotations, without requiring the old filename search index.
+  searchFavorites(query = "") {
+    const normalized = String(query).trim().toLowerCase();
+    const rows = this.db.prepare(`
+      SELECT f.path, f.root_path AS rootPath, f.name, f.size,
+        f.modified_at AS modifiedAt, f.first_seen_at AS firstSeenAt,
+        f.last_seen_at AS lastSeenAt, f.status,
+        a.favorite AS favorite, 0 AS textMatched, 0 AS annotationMatched,
+        0 AS useCount, 0 AS lastUsedAt, 0 AS matchRank,
+        NULL AS currentPath, NULL AS possiblePath
+      FROM file_annotations a CROSS JOIN files f
+      WHERE f.file_identity = a.file_identity AND f.identity_verified = 1
+        AND a.favorite = 1 AND
+        (? = '' OR instr(lower(f.name), ?) > 0 OR instr(a.search_text, ?) > 0
+          OR instr(coalesce(f.name_pinyin, ''), ?) > 0
+          OR instr(coalesce(f.name_initials, ''), ?) > 0)
+      ORDER BY f.last_seen_at DESC LIMIT 300
+    `).all(normalized, normalized, normalized, normalized, normalized);
+    return rows;
+  }
+
   get(path) {
     return this.db.prepare("SELECT path, status, file_identity AS identity FROM files WHERE path = ?").get(path);
   }
