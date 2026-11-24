@@ -84,6 +84,7 @@ function createNtfsService(database, userData, executable, { onChange, onPaths, 
     disable: (drive) => invoke("disable", drive),
     target: (drive, id) => invoke("target", drive, id),
     recordUse: (drive, id) => invoke("recordUse", drive, id),
+    favorite: (drive, id, enabled) => invoke("favorite", drive, id, enabled),
     setTrackedDrives: (drives) => invoke("trackedDrives", drives),
     async close() {
       try { await invoke("close"); } catch {}
