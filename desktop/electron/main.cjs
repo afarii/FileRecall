@@ -34,6 +34,7 @@ let ntfs;
 let searches;
 let diagnostics;
 let ntfsClosing;
+let lastTrackedDrives = "";
 let searchKeyTimer;
 let updateNotification;
 let tray;
@@ -48,7 +49,19 @@ const ownsLock = app.requestSingleInstanceLock();
 if (!ownsLock) app.quit();
 app.on("second-instance", showWindow);
 
+function trackedDrives() {
+  return [...new Set((index?.roots() ?? []).map(({ path }) => /^[a-z]:/i.test(path) ? path[0].toUpperCase() : null).filter(Boolean))].sort();
+}
+
 function notifyChanged() {
+  if (ntfs && index) {
+    const drives = trackedDrives();
+    const key = drives.join("");
+    if (key !== lastTrackedDrives) {
+      lastTrackedDrives = key;
+      void ntfs.setTrackedDrives(drives).catch(() => {});
+    }
+  }
   if (window && !window.isDestroyed()) window.webContents.send("library:changed");
 }
 
@@ -159,11 +172,13 @@ app.whenReady().then(() => {
     if (existsSync(ntfsReader)) {
       try {
         ntfs = createNtfsService(join(userData, "ntfs-index.sqlite"), userData, ntfsReader, {
+          trackedDrives: trackedDrives(),
           onChange: (state) => send("ntfs:changed", state),
           onPaths: (drive, paths) => monitor.applyJournal(drive, paths),
           onActiveDrives: (drives) => monitor.setJournalDrives(drives),
           onMetrics: (metrics) => diagnostics.setNtfsMetrics(metrics),
         });
+        lastTrackedDrives = trackedDrives().join("");
       } catch (error) {
         console.warn("NTFS index unavailable:", error.message);
       }
