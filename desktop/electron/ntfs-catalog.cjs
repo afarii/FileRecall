@@ -2,7 +2,7 @@
 
 const { DatabaseSync } = require("node:sqlite");
 const { win32 } = require("node:path");
-const { nameSearchKeys, queryTerms } = require("./filename-search.cjs");
+const { nameSearchKeys, queryTerms, termGroups, termCondition } = require("./filename-search.cjs");
 
 const DIRECTORY = 0x10;
 const DELETE = 0x200;
@@ -210,8 +210,8 @@ class NtfsCatalog {
   }
 
   apply(drive, rows, snapshot, journal, cursor) {
-    if (!rows.length && !(snapshot && cursor !== undefined)) return;
-    this.transaction(() => {
+    if (!rows.length && !(snapshot && cursor !== undefined)) return false;
+    return this.transaction(() => {
       const saveParent = this.db.prepare(`
         INSERT INTO ntfs_parent VALUES (?, ?, ?, ?)
         ON CONFLICT (drive, id) DO UPDATE SET path = excluded.path, folded = excluded.folded
@@ -263,6 +263,7 @@ class NtfsCatalog {
         this.db.prepare("UPDATE ntfs_drive SET build_position = ? WHERE drive = ?").run(cursor, drive);
       }
       if (!snapshot && cursor !== undefined) this.checkpoint(drive, journal, cursor);
+      return changed;
     });
   }
 
@@ -364,7 +365,11 @@ class NtfsCatalog {
   search(drive, query, { fastOnly = false } = {}) {
     const terms = queryTerms(query);
     if (!terms.length) return [];
-    const rawPrimary = [...terms].sort((a, b) => b.length - a.length)[0];
+    // File extensions usually occur at the end, so anchor indexed candidates
+    // on a filename/phonetic token before filtering by extension.
+    const extension = /^(?:pdf|docx?|xlsx?|pptx?|txt|md|zip|rar|7z|png|jpe?g|gif|mp[34]|html?|json|csv|exe|dll|sys)$/i;
+    const rawPrimary = [...terms].sort((a, b) =>
+      Number(extension.test(a)) - Number(extension.test(b)) || b.length - a.length)[0];
     // Split explicit path queries so we can still use the indexed filename
     // prefix instead of scanning every path on disk.
     const pathParts = rawPrimary.replaceAll("/", "\\");
@@ -383,23 +388,19 @@ class NtfsCatalog {
     function filters(words) {
       const clauses = [];
       const args = [];
-      for (const term of words) {
-        if (term.includes("/") || term.includes("\\")) {
-          clauses.push("instr(rtrim(p.folded, char(92)) || char(92) || i.folded, ?) > 0");
-          args.push(term.replaceAll("/", "\\"));
-        } else if (!/^[a-z0-9]+$/u.test(term)) {
-          // Han characters or punctuation can only appear in the literal filename.
-          clauses.push("instr(i.folded, ?) > 0");
-          args.push(term);
-        } else {
-          clauses.push("(instr(i.folded, ?) > 0 OR instr(i.pinyin, ?) > 0 OR instr(i.initials, ?) > 0)");
-          args.push(term, term, term);
-        }
+      for (const { term, count } of termGroups(words)) {
+        const path = term.includes("/") || term.includes("\\");
+        const keys = path ? ["rtrim(p.folded, char(92)) || char(92) || i.folded"]
+          : /^[a-z0-9]+$/u.test(term) ? ["i.folded", "i.pinyin", "i.initials"] : ["i.folded"];
+        const condition = termCondition(keys, path ? term.replaceAll("/", "\\") : term, count);
+        clauses.push(condition.where);
+        args.push(...condition.args);
       }
       return { where: clauses.join(" AND ") || "1", args };
     }
 
-    const others = filters(terms.filter((term) => term !== rawPrimary));
+    // Include the primary word too: a prefix match alone does not satisfy repeated words.
+    const others = filters(terms);
     if (directoryHint) {
       others.where = (others.where === "1" ? "" : others.where + " AND ") +
         "instr(p.folded, ?) > 0";
