@@ -348,7 +348,10 @@ export default function App() {
         const key = unifiedKey(record);
         const status = record.type === "ntfs"
           ? { tone: "", label: record.file.cached ? "缓存" : record.file.directory ? "文件夹" : "" }
-          : recordStatus(record);
+          : record.type === "download" && record.file.pathStatus !== "present"
+            ? { tone: record.file.pathStatus === "missing" ? "warn" : "",
+              label: record.file.pathStatus === "missing" ? "历史下载" : "状态未确认" }
+            : recordStatus(record);
         const subtitle = record.type === "local" ? (record.file.currentPath || file.path)
           : record.type === "ntfs" ? record.file.path : (record.file.domain || file.path);
         const needle = searchQuery.trim().toLowerCase();
@@ -424,7 +427,7 @@ export default function App() {
               <circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 4.4 4.4"/>
             </svg>
             <input type="search" ref={searchInput} aria-label="搜索文件和来源"
-              placeholder={semanticMode ? "用一句话描述你记得的内容" : "搜索文件名、拼音或来源"}
+              placeholder={semanticMode ? "用一句话描述你记得的内容" : "搜索文件名、网站或下载线索"}
               value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); setExpandedResults(false); setError(""); }}
               onKeyDown={(event) => {
                 if (event.key !== "ArrowDown") return;
