@@ -25,6 +25,7 @@ function relevance(record: UnifiedRecord, query: string) {
   const usage = record.type === "local" ? ((file as LocalRanking).useCount ?? 0) : 0;
   let score = Math.min(900, Math.log2(usage + 1) * 220);
   if (record.type === "local") {
+    if ((file as LocalRanking & {matchScore?: number}).matchScore !== undefined) return (file as LocalRanking & {matchScore?: number}).matchScore!;
     const rank = (file as LocalRanking).matchRank ?? 5;
     score += [700, 280, 200, 310, 370, 80][rank] ?? 80;
     if (record.file.favorite === 1) score += 80;
@@ -43,14 +44,14 @@ export default function App() {
   const [folders, setFolders] = useState<IndexedFolder[]>([]);
   const [historyFolders, setHistoryFolders] = useState<Array<{ path: string; count: number }>>([]);
   const [clearingFolder, setClearingFolder] = useState<string | null>(null);
-  const [localResult, setLocalResult] = useState<{ query: string; files: FileRecord[] }>();
+  const [unifiedResult, setUnifiedResult] = useState<{ query: string; favorites: boolean; files: UnifiedRecord[] }>();
   const [browserResult, setBrowserResult] = useState<{
     query: string; files: BrowserDownload[]; manager?: BrowserDownload["manager"]; error?: string;
   }>();
   const [downloadRefresh, setDownloadRefresh] = useState(0);
   const [filter, setFilter] = useState<"all" | "favorites">("all");
   const [selected, setSelected] = useState<string | null>(null);
-  const [ntfsResult, setNtfsResult] = useState<{ query: string; files: NtfsResult[] }>();
+
   const selectedButton = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
   useEffect(() => {
@@ -80,6 +81,8 @@ export default function App() {
   const semantic = useSemanticSearch();
   const currentQuery = useRef(searchQuery);
   currentQuery.current = searchQuery;
+  const currentFavorite = useRef(filter === "favorites");
+  currentFavorite.current = filter === "favorites";
   const reloadVersion = useRef(0);
   const [busy, setBusy] = useState(false);
   const [textEnabled, setTextEnabled] = useState<boolean>();
@@ -89,9 +92,13 @@ export default function App() {
 
   const reload = useCallback(async (search: string) => {
     const version = ++reloadVersion.current;
-    const nextFiles = await window.fileRecall.search(search);
-    if (version !== reloadVersion.current || search !== currentQuery.current) return;
-    setLocalResult({ query: search, files: nextFiles });
+    const favorite = currentFavorite.current;
+    const api = window.fileRecall as typeof window.fileRecall & {
+      unifiedSearch: (query: string, favorites: boolean) => Promise<UnifiedRecord[]>;
+    };
+    const files = await api.unifiedSearch(search, favorite);
+    if (version !== reloadVersion.current || search !== currentQuery.current || favorite !== currentFavorite.current) return;
+    setUnifiedResult({ query: search, favorites: favorite, files });
   }, []);
   const refreshFolders = useCallback(async () => {
     const [nextFolders, nextHistoryFolders] = await Promise.all([
@@ -103,7 +110,7 @@ export default function App() {
 
   useEffect(() => {
     if (mode === "literal") void reload(searchQuery).catch((err) => setError(String(err)));
-  }, [reload, searchQuery, mode]);
+  }, [reload, searchQuery, mode, filter]);
 
   useEffect(() => {
     if (view === "folders") void refreshFolders().catch((err) => setError(String(err)));
@@ -273,36 +280,28 @@ export default function App() {
   }
 
 
-  const local = localResult?.query === searchQuery ? localResult : undefined;
+  const matched = unifiedResult?.query === searchQuery &&
+    unifiedResult.favorites === (filter === "favorites") ? unifiedResult : undefined;
   const browser = browserResult?.query === searchQuery && browserResult.manager === downloadManager ? browserResult : undefined;
   const semanticMode = mode === "semantic";
   const semanticResult = semantic.result?.query === query ? semantic.result.result : undefined;
   const localOnly = filter === "favorites";
-  const localFiles = semanticMode ? (semanticResult?.files ?? []) : (local?.files ?? []);
-  const localRecords: SearchRecord[] = useMemo(() => localFiles
-    .filter((file) => semanticMode || filter !== "favorites" || file.favorite === 1)
-    .filter((file) => semanticMode || searchQuery.trim() || file.favorite === 1 ||
-      ((file as LocalRanking).useCount ?? 0) > 0)
-    .map((file): SearchRecord => ({ type: "local", file })), [localFiles, filter, semanticMode, searchQuery]);
   const downloadRecords: SearchRecord[] = useMemo(() => (semanticMode || localOnly ||
     (!searchQuery.trim() && filter === "all") ? [] : (browser?.files ?? []))
     .map((file): SearchRecord => ({ type: "download", file })), [browser, semanticMode, localOnly, filter, searchQuery]);
   const allRecords: UnifiedRecord[] = useMemo(() => {
-    const localPaths = new Set(localRecords.filter((record) => record.type === "local")
-      .map((record) => (record.type === "local" ? record.file.currentPath || record.file.path : "").toLowerCase()));
-    const diskRecords: UnifiedRecord[] = semanticMode || filter !== "all" ||
-      ntfsResult?.query !== searchQuery ? [] : ntfsResult.files
-      .filter((file) => !localPaths.has(file.path.toLowerCase()))
-      .map((file) => ({ type: "ntfs" as const, file }));
-    const merged: UnifiedRecord[] = [...localRecords, ...diskRecords, ...downloadRecords];
+    const filenameRecords: UnifiedRecord[] = semanticMode
+      ? (semanticResult?.files ?? []).map((file): UnifiedRecord => ({ type: "local", file }))
+      : (matched?.files ?? []);
+    const merged: UnifiedRecord[] = [...filenameRecords, ...downloadRecords];
     if (!semanticMode) merged.sort((a, b) => relevance(b, searchQuery) - relevance(a, searchQuery));
     return merged;
-  }, [localRecords, downloadRecords, ntfsResult, searchQuery, filter, semanticMode]);
+  }, [semanticMode, semanticResult, matched, downloadRecords, searchQuery]);
   const selectedRecord = allRecords.find((record) => unifiedKey(record) === selected);
   const hasResults = allRecords.length > 0;
   const expectsDownloads = !semanticMode && !localOnly &&
     (Boolean(searchQuery.trim()) || filter !== "all");
-  const loading = (!error && !local) || (expectsDownloads && !browser);
+  const loading = (!error && !matched) || (expectsDownloads && !browser);
   const pastFolders = historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path));
 
   function renderRecords(records: UnifiedRecord[], title: string) {
@@ -342,9 +341,9 @@ export default function App() {
             {record.type === "local" && !semanticMode && record.file.annotationMatched === 1 && <small>备注或标签匹配</small>}
             {sourceMatched && <small>{record.type === "download" && record.file.manager === "aria2" ? "下载地址匹配" : "来源匹配"}</small>}
           </span>
-          {(record.type === "download" || (record.type === "ntfs" && Boolean(status.label)) ||
+          {(record.type === "download" || (record.type === "ntfs" && (Boolean(status.label) || Boolean((record.file as NtfsRanking & {favorite?: number}).favorite))) ||
             (record.type === "local" && (record.file.status !== "present" || Boolean(record.file.currentPath) || record.file.favorite === 1))) &&
-            <span className={`badge ${status.tone}`}>{record.type === "local" && record.file.favorite === 1 ? "★ " : ""}{status.label}</span>}
+            <span className={`badge ${status.tone}`}>{(record.type === "local" && record.file.favorite === 1) || (record.type === "ntfs" && Boolean((record.file as NtfsRanking & {favorite?: number}).favorite)) ? "★ " : ""}{status.label}</span>}
         </button>;
       })}
       {records.length > 60 && !expandedResults &&
@@ -424,11 +423,11 @@ export default function App() {
           {!semanticMode && !hasResults && !loading && <p className="empty">{searchQuery.trim() || filter !== "all"
             ? "没有找到匹配的记录。" : "输入文件名、拼音或来源即可开始搜索。常用文件会显示在这里。"}</p>}
           {renderRecords(allRecords, semanticMode ? "相近内容" : "搜索结果")}
-          <NtfsQuickResults query={searchQuery} enabled={!semanticMode && filter === "all"}
-            onResults={setNtfsResult} />
+          <NtfsQuickResults enabled={!semanticMode} />
         </section>
         {selectedRecord && (selectedRecord.type === "ntfs"
-          ? <NtfsDetails key={unifiedKey(selectedRecord)} file={selectedRecord.file} onClose={closeDetails} />
+          ? <NtfsDetails key={unifiedKey(selectedRecord)} file={selectedRecord.file} onClose={closeDetails}
+            onFavoriteChanged={() => void reload(currentQuery.current).catch((err) => setError(String(err)))} />
           : <FileDetails key={unifiedKey(selectedRecord)} record={selectedRecord}
             onClose={closeDetails} reveal={reveal} openSource={openSource} />)}
       </div> : <section className="folders-view" aria-labelledby="folder-heading">
