@@ -33,6 +33,7 @@ function respond(id, action, args = []) {
       case "disable": return service.disable(args[0]);
       case "target": return service.target(args[0], args[1]);
       case "recordUse": service.catalog.recordUse(args[0], args[1]); return true;
+      case "trackedDrives": service.trackedDrives = new Set(args[0]); return true;
       case "status": return read();
       case "close":
         await service.close();
@@ -49,6 +50,7 @@ function respond(id, action, args = []) {
 }
 try {
   service = new NtfsSearch(workerData.database, workerData.userData, workerData.executable, {
+    trackedDrives: workerData.trackedDrives,
     onChange: (status) => parentPort.postMessage({
       type: "state", status, searchableDrives: service?.searchableDrives() ?? [],
     }),
