@@ -134,6 +134,7 @@ class FileIndex {
     if (!columns.has("name_pinyin")) this.db.exec("ALTER TABLE files ADD COLUMN name_pinyin TEXT");
     if (!columns.has("name_initials")) this.db.exec("ALTER TABLE files ADD COLUMN name_initials TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS files_identity ON files(file_identity, status) WHERE file_identity IS NOT NULL");
+    this.db.exec("CREATE INDEX IF NOT EXISTS files_missing_names ON files(path) WHERE status = 'missing'");
     this.db.exec("CREATE INDEX IF NOT EXISTS files_pinyin ON files(name_pinyin)");
     this.db.exec("CREATE INDEX IF NOT EXISTS files_initials ON files(name_initials)");
     this.db.exec(`CREATE TABLE IF NOT EXISTS file_usage (
@@ -557,34 +558,41 @@ class FileIndex {
   searchAuxiliary(query) {
     const terms = queryTerms(String(query || "").trim().slice(0, 200));
     if (!terms.length) return this.searchFavorites("");
-    const nameTerm = "(instr(lower(files.name), ?) > 0 OR instr(lower(files.path), ?) > 0" +
-      " OR instr(coalesce(files.name_pinyin, ''), ?) > 0 OR instr(coalesce(files.name_initials, ''), ?) > 0)";
-    const nameWhere = terms.map(() => nameTerm).join(" AND ");
-    const noteWhere = terms.map(() => "instr(coalesce(a.search_text, ''), ?) > 0").join(" AND ");
+    const names = terms.map(() => "(instr(lower(name), ?) > 0 OR instr(lower(path), ?) > 0" +
+      " OR instr(coalesce(name_pinyin, ''), ?) > 0 OR instr(coalesce(name_initials, ''), ?) > 0)").join(" AND ");
+    const notes = terms.map(() => "instr(a.search_text, ?) > 0").join(" AND ");
+    const contents = terms.map(() => "instr(content, ?) > 0").join(" AND ");
     const text = this.textEnabled();
-    const textWhere = terms.map(() => "instr(coalesce(t.content, ''), ?) > 0").join(" AND ");
-    const sql = `SELECT files.path, CASE WHEN a.search_text IS NOT NULL AND (${noteWhere}) THEN 1 ELSE 0 END AS noteMatched,
-      ${text ? `CASE WHEN t.content IS NOT NULL AND (${textWhere}) THEN 1 ELSE 0 END` : "0"} AS contentMatched
-      FROM files
-      LEFT JOIN file_annotations a ON a.file_identity = files.file_identity
-        AND files.identity_verified = 1
-      ${text ? "LEFT JOIN file_text t ON t.path = files.path" : ""}
-      WHERE (files.status = 'missing' AND (${nameWhere}))
-        OR (a.search_text IS NOT NULL AND (${noteWhere}))
-        ${text ? `OR (t.content IS NOT NULL AND (${textWhere}))` : ""}
-      LIMIT 200`;
-    const noteArgs = terms.map((term) => term.toLowerCase());
-    const textArgs = terms.map((term) => term.toLowerCase());
-    const names = terms.flatMap((term) => [term, term, term, term]);
-    const parameters = [...noteArgs, ...(text ? textArgs : []),
-      ...names, ...noteArgs, ...(text ? textArgs : [])];
-    return this.db.prepare(sql).all(...parameters).map((row) => {
-      const file = this.metadataAtPath(row.path);
-      if (!file) return null;
-      file.annotationMatched = row.noteMatched;
-      file.textMatched = row.contentMatched;
-      return file;
-    }).filter(Boolean);
+    const rows = new Map();
+    const collect = (paths, match) => {
+      for (const { path } of paths) {
+        let file = rows.get(path);
+        if (!file) {
+          file = this.metadataAtPath(path);
+          if (!file) continue;
+          rows.set(path, file);
+        }
+        if (match === "annotationMatched") file.annotationMatched = 1;
+        if (match === "textMatched") file.textMatched = 1;
+      }
+    };
+    // Metadata streams have their own small lookup sets. Avoid the old
+    // name-search query over every current NTFS file on each keystroke.
+    const missing = this.db.prepare("SELECT path FROM files INDEXED BY files_missing_names " +
+      "WHERE status = 'missing' AND " + names + " LIMIT 100")
+      .all(...terms.flatMap((term) => [term, term, term, term]));
+    collect(missing);
+    const annotated = this.db.prepare("SELECT files.path " +
+      "FROM file_annotations a CROSS JOIN files " +
+      "ON files.file_identity = a.file_identity AND files.identity_verified = 1 " +
+      "WHERE " + notes + " LIMIT 100").all(...terms);
+    collect(annotated, "annotationMatched");
+    if (text) {
+      const documents = this.db.prepare("SELECT path FROM file_text WHERE " +
+        contents + " LIMIT 100").all(...terms);
+      collect(documents, "textMatched");
+    }
+    return [...rows.values()].slice(0, 200);
   }
 
   searchFavorites(query = "") {
