@@ -35,6 +35,9 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
     { id: "77", parent: "5", directory: "E:\\", name: "实验报告.pdf", attributes: 0, reason: 0 },
     { id: "78", parent: "5", directory: "E:\\", name: "system.sys", attributes: 0, reason: 0 },
     { id: "79", parent: "5", directory: "E:\\", name: "sample-report.txt", attributes: 0, reason: 0 },
+    { id: "80", parent: "5", directory: "E:\\", name: "md1.txt", attributes: 0, reason: 0 },
+    { id: "81", parent: "5", directory: "E:\\", name: "md-md-md-md-md.txt", attributes: 0, reason: 0 },
+    { id: "82", parent: "5", directory: "E:\\", name: "实验报告.docx", attributes: 0, reason: 0 },
   ], true);
   assert.ok((await search.searchLocal("sy")).some((item) => item.name === "实验报告.pdf"));
   local.recordUse(report);
@@ -42,6 +45,19 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
   assert.equal((await search.searchLocal("sy"))[0].useCount, 2);
   const matches = await search.searchNtfs("sy", [{ drive: "E", cached: false }]);
   assert.equal(matches[0].name, "实验报告.pdf");
+  // Test the actual fast unified path before usage ranking can mask a miss.
+  const drives = [{ drive: "E", cached: false }];
+  for (const query of ["sy pdf", "pdf sy", "sy pd", "sybg pdf", "shiyan pdf"]) {
+    const hits = await search.searchUnified(query, drives);
+    assert.ok(hits.some(({ file }) => file.name === "实验报告.pdf"), query);
+    assert.ok(!hits.some(({ file }) => file.name === "实验报告.docx"), query);
+  }
+  const repeat = await search.searchUnified("md md md md md", drives);
+  assert.ok(repeat.some(({ file }) => file.name === "md-md-md-md-md.txt"));
+  assert.ok(!repeat.some(({ file }) => file.name === "md1.txt"));
+  ntfs.recordUse("E", "80");
+  assert.ok(!(await search.searchUnified("md md md md md", drives)).some(({ file }) => file.name === "md1.txt"),
+    "frequent-file ranking must not bypass repeated-word matching");
   ntfs.recordUse("E", "77");
   const after = await search.searchNtfs("sy", [{ drive: "E", cached: false }]);
   assert.equal(after[0].useCount, 1);
