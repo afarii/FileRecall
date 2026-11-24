@@ -3,10 +3,10 @@
 const { Worker } = require("node:worker_threads");
 const { join } = require("node:path");
 
-function createSearchService({ localDatabase, ntfsDatabase, applicationData, onMetric = () => {} }) {
+function createSearchService({ localDatabase, ntfsDatabase, downloadsDatabase, applicationData, onMetric = () => {} }) {
   const createChannel = (searchKind) => {
     const worker = new Worker(join(__dirname, "search-worker.cjs"), {
-      workerData: { localDatabase, ntfsDatabase, applicationData },
+      workerData: { localDatabase, ntfsDatabase, downloadsDatabase, applicationData },
     });
     worker.unref();
     const pending = new Map();
@@ -105,8 +105,13 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData, onM
   const local = createChannel("local");
   const ntfs = createChannel("ntfs");
   let deep;
+  let downloads;
   return {
     searchLocal: (query) => local.request(query),
+    searchDownloads: (query) => {
+      downloads ??= createChannel("downloads");
+      return downloads.request(query, [], "downloads");
+    },
     searchUnified: (query, drives, favoritesOnly = false) => ntfs.request(query, drives, "unified", favoritesOnly),
     searchNtfs: (query, drives) => ntfs.request(query, drives),
     // Spawn only when prefix search has no hits. Slow substring scans stay
@@ -116,7 +121,8 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData, onM
       return deep.request(query, drives);
     },
     async close() {
-      await Promise.all([local.close(), ntfs.close(), ...(deep ? [deep.close()] : [])]);
+      await Promise.all([local.close(), ntfs.close(), ...(deep ? [deep.close()] : []),
+        ...(downloads ? [downloads.close()] : [])]);
     },
   };
 }
