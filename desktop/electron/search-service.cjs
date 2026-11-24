@@ -12,6 +12,20 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData, onM
     const pending = new Map();
     let sequence = 0;
     let stopped = false;
+    let inFlight = null;
+    let queued = null;
+    const coalesce = searchKind !== "local";
+
+    function dispatch(job) {
+      if (coalesce) inFlight = job.id;
+      worker.postMessage(job);
+    }
+    function next() {
+      if (!coalesce || inFlight !== null || !queued) return;
+      const job = queued;
+      queued = null;
+      if (pending.has(job.id)) dispatch(job);
+    }
 
     function fail(error) {
       if (stopped) return;
@@ -21,12 +35,15 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData, onM
         reject(error);
       }
       pending.clear();
+      queued = null;
+      inFlight = null;
       worker.unref();
     }
 
     worker.on("message", (reply) => {
+      if (inFlight === reply.id) inFlight = null;
       const item = pending.get(reply.id);
-      if (!item) return;
+      if (!item) { next(); return; }
       clearTimeout(item.timer);
       pending.delete(reply.id);
       if (!pending.size) worker.unref();
@@ -37,6 +54,7 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData, onM
         }
         item.resolve(reply.files);
       }
+      next();
     });
     worker.on("error", fail);
     worker.on("exit", (code) => fail(new Error("搜索线程已退出：" + code)));
@@ -53,7 +71,21 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData, onM
         timer.unref();
         pending.set(id, { resolve, reject, timer, startedAt: Date.now() });
         worker.ref();
-        worker.postMessage({ id, kind, query, drives });
+        const job = { id, kind, query, drives };
+        if (coalesce && inFlight !== null) {
+          // At most one waiting query. Old input is never worth a new scan.
+          if (queued) {
+            const obsolete = pending.get(queued.id);
+            if (obsolete) {
+              clearTimeout(obsolete.timer);
+              pending.delete(queued.id);
+              obsolete.resolve([]);
+            }
+          }
+          queued = job;
+        } else {
+          dispatch(job);
+        }
       });
     }
 
