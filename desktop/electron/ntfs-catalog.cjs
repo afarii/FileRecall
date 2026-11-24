@@ -54,6 +54,8 @@ class NtfsCatalog {
       use_count INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (drive, id)
     ) WITHOUT ROWID`);
+    const usageColumns = new Set(this.db.prepare("PRAGMA table_info(ntfs_usage)").all().map(({ name }) => name));
+    if (!usageColumns.has("favorite")) this.db.exec("ALTER TABLE ntfs_usage ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0");
     const driveColumns = new Set(this.db.prepare("PRAGMA table_info(ntfs_drive)").all().map((entry) => entry.name));
     if (!driveColumns.has("build_position")) this.db.exec("ALTER TABLE ntfs_drive ADD COLUMN build_position TEXT");
     if (!driveColumns.has("build_journal")) this.db.exec("ALTER TABLE ntfs_drive ADD COLUMN build_journal TEXT");
@@ -320,6 +322,30 @@ class NtfsCatalog {
       .run(drive, id, Date.now());
   }
 
+  favorite(drive, id, enabled) {
+    if (typeof enabled !== "boolean") throw new TypeError("无效的收藏状态");
+    if (!this.item(drive, id)) return false;
+    this.db.prepare(`INSERT INTO ntfs_usage(drive, id, favorite)
+      VALUES (?, ?, ?) ON CONFLICT(drive, id) DO UPDATE SET favorite = excluded.favorite`)
+      .run(drive, id, Number(enabled));
+    return true;
+  }
+
+  favorites(drive, limit = 100) {
+    const rows = this.db.prepare(`SELECT i.id, i.parent, i.name, i.folded, i.pinyin, i.initials,
+      p.path AS directory, i.directory AS isDirectory, u.use_count AS useCount,
+      u.last_used_at AS lastUsedAt, u.favorite AS favorite
+      FROM ntfs_usage u CROSS JOIN ntfs_item i ON i.drive = u.drive AND i.id = u.id
+      LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
+      WHERE u.drive = ? AND u.favorite = 1
+      ORDER BY u.last_used_at DESC LIMIT ?`).all(drive, limit);
+    return rows.filter((row) => {
+      row.directory ??= this.resolveParent(drive, row.parent);
+      const path = fullPath(row)?.toLowerCase();
+      return path && path !== this.applicationData && !below(path, this.applicationData);
+    });
+  }
+
   search(drive, query, { fastOnly = false } = {}) {
     const terms = queryTerms(query);
     if (!terms.length) return [];
@@ -334,7 +360,8 @@ class NtfsCatalog {
     const upper = primary + "\uffff";
     const columns = "SELECT i.id, i.parent, i.name, i.folded, i.pinyin, i.initials," +
       " p.path AS directory, i.directory AS isDirectory," +
-      " coalesce(u.use_count, 0) AS useCount, coalesce(u.last_used_at, 0) AS lastUsedAt";
+      " coalesce(u.use_count, 0) AS useCount, coalesce(u.last_used_at, 0) AS lastUsedAt," +
+      " coalesce(u.favorite, 0) AS favorite";
     const from = "FROM ntfs_item i LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent" +
       " LEFT JOIN ntfs_usage u ON u.drive = i.drive AND u.id = i.id";
 
@@ -386,7 +413,7 @@ class NtfsCatalog {
       " FROM ntfs_usage u CROSS JOIN ntfs_item i ON i.drive = u.drive AND i.id = u.id" +
       " LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent" +
       " WHERE u.drive = ? AND " + usedFilters.where +
-      " ORDER BY u.use_count DESC, u.last_used_at DESC LIMIT 40")
+      " ORDER BY u.favorite DESC, u.use_count DESC, u.last_used_at DESC LIMIT 40")
       .all(drive, ...usedFilters.args);
     collect(frequent);
 
@@ -431,6 +458,7 @@ class NtfsCatalog {
         const name = row.folded || row.name.toLowerCase();
         const chinese = /\p{Script=Han}/u.test(row.name);
         let score = Math.min(900, Math.log2(1 + row.useCount) * 220);
+        if (row.favorite) score += 180;
         if (name === query) score += 700;
         else if (name.startsWith(primary)) score += 280;
         else if (chinese && row.initials?.startsWith(primary)) score += 370;
