@@ -336,7 +336,8 @@ export default function App() {
   const selectedRecord = allRecords.find((record) => unifiedKey(record) === selected);
   const hasResults = allRecords.length > 0;
   // The fast filename results render before the slower download/history enrichment completes.
-  const loading = !error && !matched;
+  const searchingHistory = !semanticMode && !localOnly && Boolean(searchQuery.trim()) && !browser;
+  const loading = (!error && !matched) || (searchingHistory && currentRecords.length === 0);
   const pastFolders = historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path));
 
   function renderRecords(records: UnifiedRecord[], title: string) {
