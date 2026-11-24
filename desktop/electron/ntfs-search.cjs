@@ -19,7 +19,7 @@ function validateVolume(info) {
 
 class NtfsSearch {
   constructor(database, userData, executable, { onChange, onPaths, onActiveDrives,
-    createReader = startNtfsReader, discoverDrives = discoverFixedNtfsDrives }) {
+    createReader = startNtfsReader, discoverDrives = discoverFixedNtfsDrives, trackedDrives }) {
     this.catalog = new NtfsCatalog(database, userData);
     this.executable = executable;
     this.createReader = createReader;
@@ -29,6 +29,7 @@ class NtfsSearch {
     this.onChange = onChange;
     this.onPaths = onPaths;
     this.onActiveDrives = onActiveDrives;
+    this.trackedDrives = Array.isArray(trackedDrives) ? new Set(trackedDrives) : null;
     this.sessions = new Map();
     this.tail = Promise.resolve();
     this.interval = setInterval(() => this.schedulePoll(), 3000);
@@ -288,10 +289,13 @@ class NtfsSearch {
     const latest = info.next;
     for (let page = 0; page < 12 && !this.closed && !this.cancelled?.has(drive); page++) {
       if (BigInt(cursor) >= BigInt(latest)) break;
-      const batch = await this.reader.request("read", drive, info.volume, info.journal, cursor);
+      const needsPaths = !this.trackedDrives || this.trackedDrives.has(drive);
+      const batch = await this.reader.request(needsPaths ? "read" : "read-names", drive, info.volume, info.journal, cursor);
       if (!batch.next || BigInt(batch.next) < BigInt(cursor)) throw new Error("USN 读取进度无效。");
-      const paths = this.catalog.changedPaths(drive, batch.rows);
-      if (paths.length) await this.onPaths(drive, paths);
+      if (needsPaths) {
+        const paths = this.catalog.changedPaths(drive, batch.rows);
+        if (paths.length) await this.onPaths(drive, paths);
+      }
       if (this.closed || this.cancelled?.has(drive)) return false;
       if (this.catalog.shouldRebuild(drive, batch.rows)) {
         this.sessions.set(drive, { phase: "rebuild" });
@@ -302,7 +306,7 @@ class NtfsSearch {
         const slice = batch.rows.slice(offset, offset + 192);
         const isLast = offset + slice.length === batch.rows.length;
         this.catalog.apply(drive, slice, false, info.journal, isLast ? batch.next : undefined);
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setTimeout(resolve, 4));
       }
       if (!batch.rows.length) this.catalog.checkpoint(drive, info.journal, batch.next);
       if (batch.next === cursor) throw new Error("USN 读取进度未前进。");
