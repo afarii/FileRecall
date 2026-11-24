@@ -6,7 +6,7 @@ const { basename, dirname, isAbsolute, join, relative, resolve, sep } = require(
 const { DatabaseSync } = require("node:sqlite");
 const { canIndexText, textSignature, readText } = require("./text-content.cjs");
 const { readMotw } = require("./motw.cjs");
-const { nameSearchKeys, queryTerms } = require("./filename-search.cjs");
+const { nameSearchKeys, queryTerms, termGroups, termCondition } = require("./filename-search.cjs");
 
 function fileIdentity(info) {
   if (!info.isFile() || info.nlink !== 1n || info.dev <= 0n || info.ino <= 0n || info.birthtimeNs <= 0n) return null;
@@ -492,11 +492,11 @@ class FileIndex {
     const terms = queryTerms(query);
     const searchText = terms.length > 0 && this.textEnabled();
     const textMatch = searchText ? "instr(file_text.content, ?) > 0" : "0";
-    const conditions = terms.map(() => "(" +
-      "instr(lower(files.name), ?) > 0 OR instr(lower(files.path), ?) > 0 OR " +
-      "instr(coalesce(files.name_pinyin, ''), ?) > 0 OR " +
-      "instr(coalesce(files.name_initials, ''), ?) > 0)").join(" AND ");
-    const filters = terms.flatMap((term) => [term, term, term, term]);
+    const groups = termGroups(terms).map(({ term, count }) =>
+      termCondition(["lower(files.name)", "lower(files.path)", "coalesce(files.name_pinyin, '')",
+        "coalesce(files.name_initials, '')"], term, count));
+    const conditions = groups.map(({ where }) => where).join(" AND ");
+    const filters = groups.flatMap(({ args }) => args);
     const selection = "(" + (conditions || "1") + ") OR textMatched = 1 OR annotationMatched = 1";
     return this.db.prepare(
       "SELECT files.path, root_path AS rootPath, name, size, modified_at AS modifiedAt," +
@@ -558,10 +558,15 @@ class FileIndex {
   searchAuxiliary(query) {
     const terms = queryTerms(String(query || "").trim().slice(0, 200));
     if (!terms.length) return this.searchFavorites("");
-    const names = terms.map(() => "(instr(lower(name), ?) > 0 OR instr(lower(path), ?) > 0" +
-      " OR instr(coalesce(name_pinyin, ''), ?) > 0 OR instr(coalesce(name_initials, ''), ?) > 0)").join(" AND ");
-    const notes = terms.map(() => "instr(a.search_text, ?) > 0").join(" AND ");
-    const contents = terms.map(() => "instr(content, ?) > 0").join(" AND ");
+    const groups = termGroups(terms);
+    const build = (columns) => {
+      const conditions = groups.map(({ term, count }) => termCondition(columns, term, count));
+      return { where: conditions.map(({ where }) => where).join(" AND "),
+        args: conditions.flatMap(({ args }) => args) };
+    };
+    const names = build(["lower(name)", "lower(path)", "coalesce(name_pinyin, '')", "coalesce(name_initials, '')"]);
+    const notes = build(["a.search_text"]);
+    const contents = build(["content"]);
     const text = this.textEnabled();
     const rows = new Map();
     const collect = (paths, match) => {
@@ -579,17 +584,17 @@ class FileIndex {
     // Metadata streams have their own small lookup sets. Avoid the old
     // name-search query over every current NTFS file on each keystroke.
     const missing = this.db.prepare("SELECT path FROM files INDEXED BY files_missing_names " +
-      "WHERE status = 'missing' AND " + names + " LIMIT 100")
-      .all(...terms.flatMap((term) => [term, term, term, term]));
+      "WHERE status = 'missing' AND " + names.where + " LIMIT 100")
+      .all(...names.args);
     collect(missing);
     const annotated = this.db.prepare("SELECT files.path " +
       "FROM file_annotations a CROSS JOIN files " +
       "ON files.file_identity = a.file_identity AND files.identity_verified = 1 " +
-      "WHERE " + notes + " LIMIT 100").all(...terms);
+      "WHERE " + notes.where + " LIMIT 100").all(...notes.args);
     collect(annotated, "annotationMatched");
     if (text) {
       const documents = this.db.prepare("SELECT path FROM file_text WHERE " +
-        contents + " LIMIT 100").all(...terms);
+        contents.where + " LIMIT 100").all(...contents.args);
       collect(documents, "textMatched");
     }
     return [...rows.values()].slice(0, 200);
