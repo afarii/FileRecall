@@ -14,6 +14,7 @@ function mergeFileSearch({ query, favoritesOnly = false, localFiles = [], ntfsFi
     const drive = driveOf(path);
     const covered = drive && indexed.has(drive);
     if (favoritesOnly && !file.favorite) continue;
+    if (!query.trim() && !favoritesOnly && !file.favorite && !(file.useCount > 0)) continue;
     const metadataMatch = file.textMatched || file.annotationMatched;
     if (covered && file.status === "present" && query.trim() && !metadataMatch && !file.favorite) continue;
     byPath.set(path, { type: "local", file });
