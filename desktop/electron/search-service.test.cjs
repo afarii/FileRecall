@@ -45,6 +45,14 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
   const after = await search.searchNtfs("sy", [{ drive: "E", cached: false }]);
   assert.equal(after[0].useCount, 1);
   assert.equal(after[0].cached, false);
+  const unified = await search.searchUnified("sy", [{ drive: "E", cached: false }]);
+  assert.equal(unified[0].type, "ntfs");
+  assert.equal(unified[0].file.name, "实验报告.pdf");
+  ntfs.favorite("E", "77", true);
+  const favorites = await search.searchUnified("", [{ drive: "E", cached: false }], true);
+  assert.equal(favorites[0].file.name, "实验报告.pdf");
+  assert.equal(favorites[0].file.favorite, 1);
+
   assert.deepEqual(await search.searchNtfs("sy", []), []);
   const quick = await search.searchNtfs("report", [{ drive: "E", cached: false }]);
   assert.deepEqual(quick, [], "indexed hot path skips whole-volume substring scans");
