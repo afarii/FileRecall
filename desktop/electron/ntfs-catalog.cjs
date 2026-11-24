@@ -47,6 +47,15 @@ class NtfsCatalog {
     if (!columns.has("initials")) this.db.exec("ALTER TABLE ntfs_item ADD COLUMN initials TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_item_pinyin ON ntfs_item(drive, pinyin)");
     this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_item_initials ON ntfs_item(drive, initials)");
+    // A tiny partial index prevents a complete MFT scan on every migration tick.
+    this.db.exec("CREATE INDEX IF NOT EXISTS ntfs_missing_keys ON ntfs_item(drive, id) WHERE pinyin IS NULL OR initials IS NULL");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS ntfs_usage (
+      drive TEXT NOT NULL, id TEXT NOT NULL,
+      use_count INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (drive, id)
+    ) WITHOUT ROWID`);
+    const usageColumns = new Set(this.db.prepare("PRAGMA table_info(ntfs_usage)").all().map(({ name }) => name));
+    if (!usageColumns.has("favorite")) this.db.exec("ALTER TABLE ntfs_usage ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0");
     const driveColumns = new Set(this.db.prepare("PRAGMA table_info(ntfs_drive)").all().map((entry) => entry.name));
     if (!driveColumns.has("build_position")) this.db.exec("ALTER TABLE ntfs_drive ADD COLUMN build_position TEXT");
     if (!driveColumns.has("build_journal")) this.db.exec("ALTER TABLE ntfs_drive ADD COLUMN build_journal TEXT");
@@ -81,12 +90,16 @@ class NtfsCatalog {
     this.db.prepare("DELETE FROM ntfs_parent WHERE drive = ?").run(drive);
   }
 
+  // Pausing a volume must preserve its persisted MFT snapshot. Users often
+  // pause before reinstalling and expect the index to resume immediately.
   disable(drive) {
-    this.transaction(() => {
-      this.discardRows(drive);
-      this.db.prepare("DELETE FROM ntfs_drive WHERE drive = ?").run(drive);
-      this.db.prepare("INSERT OR IGNORE INTO ntfs_excluded_drive VALUES (?)").run(drive);
-    });
+    this.db.prepare("INSERT OR IGNORE INTO ntfs_excluded_drive VALUES (?)").run(drive);
+  }
+
+  activeDrives() {
+    return this.db.prepare(`SELECT d.* FROM ntfs_drive d
+      WHERE NOT EXISTS (SELECT 1 FROM ntfs_excluded_drive x WHERE x.drive = d.drive)
+      ORDER BY d.drive`).all();
   }
 
   beginBuild(drive, journal, startUsn) {
@@ -237,7 +250,10 @@ class NtfsCatalog {
           const root = drive + ":\\";
           parentChanged = saveParent.run(drive, row.parent, root, root.toLowerCase()).changes;
         }
-        const keys = nameSearchKeys(row.name);
+        // ASCII-only filenames already have a fast folded-name index; avoid two
+        // redundant phonetic keys and large regex allocations for most MFT rows.
+        const keys = /[\u3400-\u9fff\uf900-\ufaff]/u.test(row.name)
+          ? nameSearchKeys(row.name) : { pinyin: "", initials: "" };
         const itemChanged = saveItem.run(drive, row.id, row.parent, row.name, row.name.toLowerCase(),
           Number(directory), keys.pinyin, keys.initials).changes;
         changed = Boolean(parentChanged || itemChanged) || changed;
@@ -246,7 +262,7 @@ class NtfsCatalog {
         // Same transaction as the rows: crash recovery resumes at an exact MFT cursor.
         this.db.prepare("UPDATE ntfs_drive SET build_position = ? WHERE drive = ?").run(cursor, drive);
       }
-      if (changed && !snapshot) this.checkpoint(drive, journal, cursor);
+      if (!snapshot && cursor !== undefined) this.checkpoint(drive, journal, cursor);
     });
   }
 
@@ -283,7 +299,7 @@ class NtfsCatalog {
 
   backfillSearchKeys(limit = 300) {
     const rows = this.db.prepare(
-      "SELECT drive, id, name FROM ntfs_item WHERE pinyin IS NULL OR initials IS NULL LIMIT ?"
+      "SELECT drive, id, name FROM ntfs_item INDEXED BY ntfs_missing_keys WHERE pinyin IS NULL OR initials IS NULL LIMIT ?"
     ).all(limit);
     if (!rows.length) return 0;
     this.transaction(() => {
@@ -298,13 +314,71 @@ class NtfsCatalog {
     return rows.length;
   }
 
-  search(drive, query) {
+  recordUse(drive, id) {
+    if (!this.item(drive, id)) return;
+    this.db.prepare(`INSERT INTO ntfs_usage(drive, id, use_count, last_used_at)
+      VALUES (?, ?, 1, ?) ON CONFLICT(drive, id) DO UPDATE SET
+      use_count = use_count + 1, last_used_at = excluded.last_used_at`)
+      .run(drive, id, Date.now());
+  }
+
+  favorite(drive, id, enabled) {
+    if (typeof enabled !== "boolean") throw new TypeError("无效的收藏状态");
+    if (!this.item(drive, id)) return false;
+    this.db.prepare(`INSERT INTO ntfs_usage(drive, id, favorite)
+      VALUES (?, ?, ?) ON CONFLICT(drive, id) DO UPDATE SET favorite = excluded.favorite`)
+      .run(drive, id, Number(enabled));
+    return true;
+  }
+
+  favorites(drive, limit = 100) {
+    const rows = this.db.prepare(`SELECT i.id, i.parent, i.name, i.folded, i.pinyin, i.initials,
+      p.path AS directory, i.directory AS isDirectory, u.use_count AS useCount,
+      u.last_used_at AS lastUsedAt, u.favorite AS favorite
+      FROM ntfs_usage u CROSS JOIN ntfs_item i ON i.drive = u.drive AND i.id = u.id
+      LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
+      WHERE u.drive = ? AND u.favorite = 1
+      ORDER BY u.last_used_at DESC LIMIT ?`).all(drive, limit);
+    return rows.filter((row) => {
+      row.directory ??= this.resolveParent(drive, row.parent);
+      const path = fullPath(row)?.toLowerCase();
+      return path && path !== this.applicationData && !below(path, this.applicationData);
+    });
+  }
+
+  recent(drive, limit = 60) {
+    const rows = this.db.prepare(`SELECT i.id, i.parent, i.name, i.folded, i.pinyin, i.initials,
+      p.path AS directory, i.directory AS isDirectory, u.use_count AS useCount,
+      u.last_used_at AS lastUsedAt, u.favorite AS favorite
+      FROM ntfs_usage u CROSS JOIN ntfs_item i ON i.drive = u.drive AND i.id = u.id
+      LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent
+      WHERE u.drive = ? AND (u.use_count > 0 OR u.favorite = 1)
+      ORDER BY u.favorite DESC, u.use_count DESC, u.last_used_at DESC LIMIT ?`).all(drive, limit);
+    return rows.filter((row) => {
+      row.directory ??= this.resolveParent(drive, row.parent);
+      const path = fullPath(row)?.toLowerCase();
+      return path && path !== this.applicationData && !below(path, this.applicationData);
+    });
+  }
+
+  search(drive, query, { fastOnly = false } = {}) {
     const terms = queryTerms(query);
     if (!terms.length) return [];
-    const primary = [...terms].sort((a, b) => b.length - a.length)[0];
+    const rawPrimary = [...terms].sort((a, b) => b.length - a.length)[0];
+    // Split explicit path queries so we can still use the indexed filename
+    // prefix instead of scanning every path on disk.
+    const pathParts = rawPrimary.replaceAll("/", "\\");
+    const separator = pathParts.lastIndexOf("\\");
+    const directoryHint = separator >= 0 ? pathParts.slice(0, separator) : "";
+    const primary = separator >= 0 ? pathParts.slice(separator + 1) : rawPrimary;
+    if (!primary) return [];
     const upper = primary + "\uffff";
-    const columns = "SELECT i.id, i.parent, i.name, p.path AS directory, i.directory AS isDirectory";
-    const from = "FROM ntfs_item i LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent";
+    const columns = "SELECT i.id, i.parent, i.name, i.folded, i.pinyin, i.initials," +
+      " p.path AS directory, i.directory AS isDirectory," +
+      " coalesce(u.use_count, 0) AS useCount, coalesce(u.last_used_at, 0) AS lastUsedAt," +
+      " coalesce(u.favorite, 0) AS favorite";
+    const from = "FROM ntfs_item i LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent" +
+      " LEFT JOIN ntfs_usage u ON u.drive = i.drive AND u.id = i.id";
 
     function filters(words) {
       const clauses = [];
@@ -325,7 +399,12 @@ class NtfsCatalog {
       return { where: clauses.join(" AND ") || "1", args };
     }
 
-    const others = filters(terms.filter((term) => term !== primary));
+    const others = filters(terms.filter((term) => term !== rawPrimary));
+    if (directoryHint) {
+      others.where = (others.where === "1" ? "" : others.where + " AND ") +
+        "instr(p.folded, ?) > 0";
+      others.args.push(directoryHint);
+    }
     const results = [];
     const seen = new Set();
     const applicationData = this.applicationData;
@@ -342,26 +421,75 @@ class NtfsCatalog {
       }
     }
 
-    // Separate indexed range scans avoid sorting huge sets when the prefix is common.
+    // Look up the tiny set of files the user has actually used before broad name searches.
+    // This keeps familiar files visible even when a short prefix matches thousands of system files.
+    const usedFilters = filters(terms);
+    const frequent = this.db.prepare(columns +
+      " FROM ntfs_usage u CROSS JOIN ntfs_item i ON i.drive = u.drive AND i.id = u.id" +
+      " LEFT JOIN ntfs_parent p ON p.drive = i.drive AND p.id = i.parent" +
+      " WHERE u.drive = ? AND " + usedFilters.where +
+      " ORDER BY u.favorite DESC, u.use_count DESC, u.last_used_at DESC LIMIT 40")
+      .all(drive, ...usedFilters.args);
+    collect(frequent);
+
+    // Very short romanized queries are often Chinese filename initials (e.g. sy -> 实验).
+    // Keep indexed prefix scans so typing remains responsive on large volumes.
     const columnsToTry = /^[a-z0-9]+$/u.test(primary)
-      ? ["i.folded", "i.pinyin", "i.initials"] : ["i.folded"];
+      ? (primary.length <= 2 ? ["i.initials", "i.folded", "i.pinyin"]
+        : ["i.folded", "i.pinyin", "i.initials"]) : ["i.folded"];
     for (const column of columnsToTry) {
       if (results.length >= 100) break;
-      const sql = columns + " " + from + " WHERE i.drive = ? AND " +
-        column + " >= ? AND " + column + " < ? AND " + others.where +
-        " LIMIT ?";
+      const index = { "i.folded": "ntfs_item_name", "i.initials": "ntfs_item_initials", "i.pinyin": "ntfs_item_pinyin" }[column];
+      // Materialize a bounded indexed range BEFORE joins and secondary filters.
+      // Otherwise SQLite can choose a drive-wide scan on a broad prefix,
+      // especially when its statistics do not reflect a large MFT catalog.
+      const key = column.slice(2);
+      const sql = "WITH candidates AS MATERIALIZED (SELECT * FROM ntfs_item INDEXED BY " + index +
+        " WHERE drive = ? AND " + key + " >= ? AND " + key + " < ? LIMIT ?) " +
+        columns + " " + from.replace("ntfs_item i", "candidates i") +
+        " WHERE " + others.where + " LIMIT ?";
       const matches = this.db.prepare(sql).all(drive, primary, upper,
-        ...others.args, 100 - results.length);
+        fastOnly ? 768 : 8192, ...others.args, 100 - results.length);
       collect(matches);
     }
-    if (results.length >= 100) return results;
-
-    // Preserve substring searches; normal filename queries avoid parent-path checks.
+    // Short initials such as "sy" are handled by indexed prefix scans. Avoid an
+    // O(entire disk) infix scan on each keystroke while an input is still changing.
+    // The UI's fast path never performs an entire-volume substring scan.
+    // Keep the complete scan available for explicit deep search and the
+    // compatibility API, without putting it on the keystroke hot path.
+    if (fastOnly || results.length >= 100 ||
+        (primary.length <= 2 && /^[a-z0-9]+$/u.test(primary)) ||
+        results.length >= 40) return rank(results);
     const all = filters(terms);
     const infix = this.db.prepare(columns + " " + from +
       " WHERE i.drive = ? AND " + all.where + " LIMIT 200").all(drive, ...all.args);
     collect(infix);
-    return results;
+    return rank(results);
+
+    function rank(matches) {
+      const systemPath = /\\(?:windows|program files|program files \(x86\)|programdata)\\/i;
+      const documentType = /\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv)$/i;
+      for (const row of matches) {
+        const name = row.folded || row.name.toLowerCase();
+        const chinese = /\p{Script=Han}/u.test(row.name);
+        let score = Math.min(900, Math.log2(1 + row.useCount) * 220);
+        if (row.favorite) score += 180;
+        if (name === query) score += 700;
+        else if (name.startsWith(primary)) score += 280;
+        else if (chinese && row.initials?.startsWith(primary)) score += 370;
+        else if (row.pinyin?.startsWith(primary)) score += 310;
+        else score += 80;
+        if (documentType.test(row.name)) score += 125;
+        if (row.isDirectory) score -= 45;
+        if (/\.(?:sys|dll|exe|mui|log)$/i.test(row.name)) score -= 200;
+        if (systemPath.test(row.directory || "")) score -= 190;
+        row.matchScore = Math.round(score);
+      }
+      matches.sort((a, b) => b.matchScore - a.matchScore ||
+        b.useCount - a.useCount || b.lastUsedAt - a.lastUsedAt ||
+        a.name.localeCompare(b.name));
+      return matches;
+    }
   }
 
   close() { this.db.close(); }

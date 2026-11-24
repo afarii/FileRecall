@@ -3,6 +3,8 @@ import { FileTile } from "./FileDetails";
 
 const phases = {
   disconnected: "等待连接",
+  cached: "已恢复上次索引",
+  paused: "已暂停（保留索引）",
   building: "正在建立文件名索引",
   rebuild: "等待重建",
   "catching-up": "正在补齐文件变更",
@@ -72,7 +74,7 @@ export default function NtfsPanel() {
   const visible = matches.filter((item) => ready.has(item.drive));
   return <section className="folders-view" aria-labelledby="ntfs-heading">
     <div className="heading-row"><h1 id="ntfs-heading">NTFS 磁盘索引管理</h1></div>
-    <p className="muted">首次启动自动检测固定 NTFS 磁盘并在后台建立文件名索引，Windows 可能要求授权只读助手；主搜索框可直接查询结果。正文索引仍按授权目录开启。</p>
+    <p className="muted">文件名索引保存在本机用户目录，升级安装后直接复用；日常仅同步 NTFS 文件变更。暂停索引会保留数据，恢复后继续同步。只有索引缺失、磁盘变更或日志失效时才需要重建。</p>
     {status?.autoPhase === "discovering" && <p role="status">正在检测本地固定 NTFS 磁盘…</p>}
     {status?.autoPhase === "authorizing" && <p role="status">正在连接只读助手，可能需要 Windows 授权…</p>}
     {status?.autoMessage && <p role="status" className="muted">{status.autoMessage}</p>}
@@ -98,7 +100,9 @@ export default function NtfsPanel() {
           {item.message && <p className={item.phase === "error" ? "error" : "muted"}>{item.message}</p>}
         </div>
         <button type="button" className="secondary" disabled={busy}
-          onClick={() => void manage(() => api.disableNtfs(item.drive))}>停止整盘索引</button>
+          onClick={() => void manage(() => String(item.phase) === "paused"
+            ? api.enableNtfs(item.drive) : api.disableNtfs(item.drive))}>
+          {String(item.phase) === "paused" ? "恢复索引" : "暂停索引（保留数据）"}</button>
       </div>)}
       {busy && <p className="muted" role="status">正在连接或更新设置…</p>}
       {ready.size > 0 && <form className="search-form" onSubmit={(event) => { event.preventDefault(); void search(); }}>

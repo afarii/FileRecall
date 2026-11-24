@@ -134,8 +134,13 @@ class FileIndex {
     if (!columns.has("name_pinyin")) this.db.exec("ALTER TABLE files ADD COLUMN name_pinyin TEXT");
     if (!columns.has("name_initials")) this.db.exec("ALTER TABLE files ADD COLUMN name_initials TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS files_identity ON files(file_identity, status) WHERE file_identity IS NOT NULL");
+    this.db.exec("CREATE INDEX IF NOT EXISTS files_missing_names ON files(path) WHERE status = 'missing'");
     this.db.exec("CREATE INDEX IF NOT EXISTS files_pinyin ON files(name_pinyin)");
     this.db.exec("CREATE INDEX IF NOT EXISTS files_initials ON files(name_initials)");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS file_usage (
+      file_key TEXT PRIMARY KEY, use_count INTEGER NOT NULL DEFAULT 0,
+      last_used_at INTEGER NOT NULL DEFAULT 0
+    )`);
   }
 
   roots() {
@@ -162,7 +167,8 @@ class FileIndex {
   isInternalPath(path) {
     const full = resolve(path);
     const profile = dirname(this.databasePath);
-    const internal = [this.databasePath, join(profile, "browser-downloads.sqlite"), join(profile, "ntfs-index.sqlite")]
+    const internal = [this.databasePath, join(profile, "browser-downloads.sqlite"), join(profile, "ntfs-index.sqlite"),
+      join(profile, "performance-diagnostics.jsonl"), join(profile, "performance-diagnostics.jsonl.old")]
       .flatMap((path) => [path, path + "-wal", path + "-shm"]);
     return internal.some((candidate) => process.platform === "win32"
       ? candidate.toLowerCase() === full.toLowerCase() : candidate === full);
@@ -471,6 +477,16 @@ class FileIndex {
     return rows.length;
   }
 
+  recordUse(path) {
+    const row = this.db.prepare("SELECT path, file_identity, identity_verified FROM files WHERE path = ?").get(path);
+    if (!row) return;
+    const key = row.identity_verified === 1 && row.file_identity
+      ? "id:" + row.file_identity : "path:" + row.path;
+    this.db.prepare(`INSERT INTO file_usage(file_key, use_count, last_used_at) VALUES (?, 1, ?)
+      ON CONFLICT(file_key) DO UPDATE SET
+        use_count = use_count + 1, last_used_at = excluded.last_used_at`).run(key, Date.now());
+  }
+
   search(rawQuery = "") {
     const query = typeof rawQuery === "string" ? rawQuery.trim().slice(0, 200) : "";
     const terms = queryTerms(query);
@@ -488,6 +504,7 @@ class FileIndex {
       " " + CURRENT_PATH + " AS currentPath, " + POSSIBLE_PATH + " AS possiblePath," +
       " coalesce(" + textMatch + ", 0) AS textMatched," +
       " coalesce(file_annotations.favorite, 0) AS favorite," +
+      " coalesce(file_usage.use_count, 0) AS useCount, coalesce(file_usage.last_used_at, 0) AS lastUsedAt," +
       " coalesce(instr(file_annotations.search_text, ?), 0) > 0 AND ? <> '' AS annotationMatched," +
       " CASE WHEN lower(files.name) = ? THEN 0" +
       " WHEN instr(lower(files.name), ?) = 1 THEN 1" +
@@ -497,14 +514,105 @@ class FileIndex {
       " ELSE 5 END AS matchRank" +
       " FROM files " +
       (searchText ? " LEFT JOIN file_text ON file_text.path = files.path " : " ") +
+      " LEFT JOIN file_usage ON file_usage.file_key = CASE WHEN files.identity_verified = 1 AND files.file_identity IS NOT NULL" +
+      " THEN 'id:' || files.file_identity ELSE 'path:' || files.path END" +
       " LEFT JOIN file_annotations ON file_annotations.file_identity = files.file_identity" +
       " AND files.identity_verified = 1 WHERE " + selection +
-      " ORDER BY matchRank, favorite DESC," +
+      " ORDER BY CASE WHEN coalesce(file_usage.use_count, 0) >= 3 THEN 0" +
+      " WHEN coalesce(file_usage.use_count, 0) >= 1 THEN 1 ELSE 2 END," +
+      " matchRank, favorite DESC, coalesce(file_usage.last_used_at, 0) DESC," +
       " CASE WHEN status = 'present' OR currentPath IS NOT NULL THEN 0 ELSE 1 END," +
       " last_seen_at DESC LIMIT 500"
     ).all(...(searchText ? [query.toLowerCase()] : []),
       query.toLowerCase(), query, query.toLowerCase(), query.toLowerCase(), query.toLowerCase(),
       query.toLowerCase(), query.toLowerCase(), ...filters);
+  }
+
+  // Legacy favorites remain in the metadata database. This read is bounded
+  // by actual annotations, without requiring the old filename search index.
+  // Point lookup for a file found by the NTFS primary name index. Data here is
+  // only provenance/annotation/history; searching filenames belongs to MFT.
+  metadataAtPath(path) {
+    this._metadataAtPath ??= this.db.prepare(`
+      SELECT files.path, files.root_path AS rootPath, files.name, files.size,
+        files.modified_at AS modifiedAt, files.first_seen_at AS firstSeenAt,
+        files.last_seen_at AS lastSeenAt, files.status,
+        ${CURRENT_PATH} AS currentPath, ${POSSIBLE_PATH} AS possiblePath,
+        coalesce(a.favorite, 0) AS favorite, 0 AS textMatched,
+        0 AS annotationMatched, 5 AS matchRank,
+        coalesce(u.use_count, 0) AS useCount, coalesce(u.last_used_at, 0) AS lastUsedAt
+      FROM files
+      LEFT JOIN file_annotations a ON a.file_identity = files.file_identity
+        AND files.identity_verified = 1
+      LEFT JOIN file_usage u ON u.file_key = CASE
+        WHEN files.identity_verified = 1 AND files.file_identity IS NOT NULL
+        THEN 'id:' || files.file_identity ELSE 'path:' || files.path END
+      WHERE files.path = ? LIMIT 1
+    `);
+    return this._metadataAtPath.get(path) ?? null;
+  }
+
+  // Search old records only for *metadata* that the MFT cannot answer:
+  // disappeared files, user-written notes/tags, and optional document text.
+  // Existing records stay in-place across upgrade; no destructive migration.
+  searchAuxiliary(query) {
+    const terms = queryTerms(String(query || "").trim().slice(0, 200));
+    if (!terms.length) return this.searchFavorites("");
+    const names = terms.map(() => "(instr(lower(name), ?) > 0 OR instr(lower(path), ?) > 0" +
+      " OR instr(coalesce(name_pinyin, ''), ?) > 0 OR instr(coalesce(name_initials, ''), ?) > 0)").join(" AND ");
+    const notes = terms.map(() => "instr(a.search_text, ?) > 0").join(" AND ");
+    const contents = terms.map(() => "instr(content, ?) > 0").join(" AND ");
+    const text = this.textEnabled();
+    const rows = new Map();
+    const collect = (paths, match) => {
+      for (const { path } of paths) {
+        let file = rows.get(path);
+        if (!file) {
+          file = this.metadataAtPath(path);
+          if (!file) continue;
+          rows.set(path, file);
+        }
+        if (match === "annotationMatched") file.annotationMatched = 1;
+        if (match === "textMatched") file.textMatched = 1;
+      }
+    };
+    // Metadata streams have their own small lookup sets. Avoid the old
+    // name-search query over every current NTFS file on each keystroke.
+    const missing = this.db.prepare("SELECT path FROM files INDEXED BY files_missing_names " +
+      "WHERE status = 'missing' AND " + names + " LIMIT 100")
+      .all(...terms.flatMap((term) => [term, term, term, term]));
+    collect(missing);
+    const annotated = this.db.prepare("SELECT files.path " +
+      "FROM file_annotations a CROSS JOIN files " +
+      "ON files.file_identity = a.file_identity AND files.identity_verified = 1 " +
+      "WHERE " + notes + " LIMIT 100").all(...terms);
+    collect(annotated, "annotationMatched");
+    if (text) {
+      const documents = this.db.prepare("SELECT path FROM file_text WHERE " +
+        contents + " LIMIT 100").all(...terms);
+      collect(documents, "textMatched");
+    }
+    return [...rows.values()].slice(0, 200);
+  }
+
+  searchFavorites(query = "") {
+    const normalized = String(query).trim().toLowerCase();
+    const rows = this.db.prepare(`
+      SELECT f.path, f.root_path AS rootPath, f.name, f.size,
+        f.modified_at AS modifiedAt, f.first_seen_at AS firstSeenAt,
+        f.last_seen_at AS lastSeenAt, f.status,
+        a.favorite AS favorite, 0 AS textMatched, 0 AS annotationMatched,
+        0 AS useCount, 0 AS lastUsedAt, 0 AS matchRank,
+        NULL AS currentPath, NULL AS possiblePath
+      FROM file_annotations a CROSS JOIN files f
+      WHERE f.file_identity = a.file_identity AND f.identity_verified = 1
+        AND a.favorite = 1 AND
+        (? = '' OR instr(lower(f.name), ?) > 0 OR instr(a.search_text, ?) > 0
+          OR instr(coalesce(f.name_pinyin, ''), ?) > 0
+          OR instr(coalesce(f.name_initials, ''), ?) > 0)
+      ORDER BY f.last_seen_at DESC LIMIT 300
+    `).all(normalized, normalized, normalized, normalized, normalized);
+    return rows;
   }
 
   get(path) {

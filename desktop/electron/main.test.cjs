@@ -65,6 +65,11 @@ async function startMain(index, ownsLock = true, withTray = false) {
     require(name) {
       if (name === "electron") return electron;
       if (name === "./indexer.cjs") return { FileIndex: function () { return index; } };
+      if (name === "./search-service.cjs") return { createSearchService: () => ({
+        searchLocal: (query) => index.search ? index.search(query) : [],
+        searchNtfs: () => [],
+        close: async () => {},
+      }) };
       if (name === "./monitor.cjs") return { DirectoryMonitor: class extends DirectoryMonitor {
         constructor(index, options) {
           super(index, { ...options, watchDirectory() {

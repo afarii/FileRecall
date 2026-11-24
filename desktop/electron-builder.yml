@@ -33,6 +33,8 @@ win:
     - zh-CN
     - en-US
 nsis:
+  # Keep the per-user SQLite file index across uninstall/reinstall and in-place upgrades.
+  deleteAppDataOnUninstall: false
   artifactName: FileRecall-Setup-${version}-${arch}.${ext}
   oneClick: false
   runAfterFinish: false

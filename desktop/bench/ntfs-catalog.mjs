@@ -5,14 +5,14 @@ import assert from "node:assert/strict";
 
 const require = createRequire(import.meta.url);
 const { NtfsCatalog } = require("../electron/ntfs-catalog.cjs");
-const records = 60000;
+const records = Number(process.env.FILERECALL_BENCH_RECORDS || 500000);
 const catalog = new NtfsCatalog(":memory:", "C:\\SyntheticAppData");
-function sample(query, iterations = 35) {
-  for (let i = 0; i < 5; i++) catalog.search("C", query);
+function sample(query, iterations = 35, fastOnly = true) {
+  for (let i = 0; i < 5; i++) catalog.search("C", query, { fastOnly });
   const ms = [];
   for (let i = 0; i < iterations; i++) {
     const start = performance.now();
-    catalog.search("C", query);
+    catalog.search("C", query, { fastOnly });
     ms.push(performance.now() - start);
   }
   ms.sort((a, b) => a - b);
@@ -43,17 +43,26 @@ try {
   assert.ok(catalog.search("C", "课程").length > 0);
   const bytes = Number(catalog.db.prepare("PRAGMA page_count").get().page_count) *
     Number(catalog.db.prepare("PRAGMA page_size").get().page_size);
+  // Regression test: verify the live search path on a large catalog even with
+  // zero history and a missing term. A planner-driven disk-wide scan must not
+  // quietly return to the latency-critical path.
+  const fast = {
+    broadPrefix: sample("r"),
+    frequentPrefix: sample("report-"),
+    pinyin: sample("sy"),
+    noMatch: sample("never-exists-at-all"),
+    multiTermMiss: sample("document- nonexistent"),
+    pathPrefix: sample("SyntheticFiles\\\\report-"),
+  };
+  for (const [name, timing] of Object.entries(fast)) {
+    assert.ok(timing.p95Ms < 100, name + " live search P95 too slow: " + timing.p95Ms + "ms");
+  }
   const summary = {
     syntheticRecords: records,
     buildMs,
     databaseMiB: Number((bytes / (1024 * 1024)).toFixed(2)),
-    queries: {
-      frequentPrefix: sample("report-"),
-      selectiveSubstring: sample("search-needle"),
-      noMatch: sample("never-exists-at-all"),
-      chineseSubstring: sample("课程"),
-      pathSubstring: sample("SyntheticFiles\\report-"),
-    },
+    liveQueries: fast,
+    deepSubstring: sample("search-needle", 5, false),
   };
   console.log("Synthetic NTFS catalog benchmark (no personal data):");
   console.log(JSON.stringify(summary, null, 2));

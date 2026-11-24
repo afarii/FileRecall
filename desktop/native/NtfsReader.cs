@@ -105,14 +105,19 @@ internal static class NtfsReader
                 || args[3] != Number(id)) throw new Win32Exception(1178);
             ulong cursor = UInt64.Parse(args[4], NumberStyles.None, Invariant);
             bool snapshot = args[0] == "enum";
-            if (!snapshot && (args[0] != "read" || cursor < (ulong)first || cursor > (ulong)next))
+            bool namesOnly = args[0] == "read-names";
+            if (!snapshot && ((!namesOnly && args[0] != "read") || cursor < (ulong)first || cursor > (ulong)next))
                 throw new Win32Exception(1181);
             var input = new byte[snapshot ? 24 : 48];
             Buffer.BlockCopy(BitConverter.GetBytes(cursor), 0, input, 0, 8);
             if (snapshot) Buffer.BlockCopy(BitConverter.GetBytes(Int64.MaxValue), 0, input, 16, 8);
             else
             {
-                Buffer.BlockCopy(BitConverter.GetBytes(0xffffffffU), 0, input, 8, 4);
+                // A filename-only catalog needs creates/deletes, renames, basic info,
+                // hard links and reparse changes. Ignore repeated content writes and
+                // close events unless an authorized folder needs them.
+                const uint NameReasons = 0x0011b300U;
+                Buffer.BlockCopy(BitConverter.GetBytes(namesOnly ? NameReasons : 0xffffffffU), 0, input, 8, 4);
                 Buffer.BlockCopy(BitConverter.GetBytes(id), 0, input, 32, 8);
                 input[40] = input[42] = 2;
             }

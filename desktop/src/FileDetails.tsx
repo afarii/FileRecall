@@ -28,12 +28,18 @@ export function recordStatus(record: SearchRecord) {
 }
 
 export function FileTile({ name }: { name: string }) {
-  const extension = /\.([a-z0-9]{1,5})$/i.exec(name)?.[1].toUpperCase() || "FILE";
-  return <span className="file-tile" data-extension={extension} aria-hidden="true">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/>
-    </svg>
-  </span>;
+  const extension = /\.([a-z0-9]{1,5})$/i.exec(name)?.[1].toUpperCase() || "";
+  const kind = (["PDF"].includes(extension) ? "pdf"
+    : ["DOC", "DOCX", "TXT", "MD"].includes(extension) ? "document"
+    : ["XLS", "XLSX", "CSV"].includes(extension) ? "sheet"
+    : ["PPT", "PPTX"].includes(extension) ? "slides"
+    : ["PNG", "JPG", "JPEG", "GIF", "WEBP", "SVG"].includes(extension) ? "image"
+    : ["ZIP", "RAR", "7Z", "TAR"].includes(extension) ? "archive"
+    : ["SYS", "DLL", "EXE"].includes(extension) ? "system" : "file");
+  const labels: Record<string, string> = { pdf: "PDF", document: "DOC", sheet: "XLS", slides: "PPT",
+    image: "IMG", archive: "ZIP", system: "SYS", file: extension.slice(0, 3) || "FILE" };
+  const label = labels[kind] ?? "FILE";
+  return <span className="file-tile" data-kind={kind} aria-hidden="true">{label}</span>;
 }
 
 function formatSize(bytes: number) {

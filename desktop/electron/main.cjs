@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, net, Notification, safeStorage, shell, Tray } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, Notification, safeStorage, shell, Tray } = require("electron");
 const { existsSync } = require("node:fs");
 const { lstat } = require("node:fs/promises");
 const { join } = require("node:path");
@@ -16,8 +16,12 @@ const { createSemanticSearch } = require("./semantic-search.cjs");
 const { createProvenance } = require("./provenance.cjs");
 const { createAria2Connection } = require("./aria2-connection.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
-const { NtfsSearch } = require("./ntfs-search.cjs");
+const { createNtfsService } = require("./ntfs-service.cjs");
+const { createSearchService } = require("./search-service.cjs");
+const { createPerformanceDiagnostics } = require("./performance-diagnostics.cjs");
 const { readMotw } = require("./motw.cjs");
+const appIconDataURL = require("./app-icon.cjs");
+const appIcon = () => nativeImage?.createFromDataURL(appIconDataURL);
 
 let window;
 let index;
@@ -27,7 +31,10 @@ let semantic;
 let aria2;
 let updates;
 let ntfs;
+let searches;
+let diagnostics;
 let ntfsClosing;
+let lastTrackedDrives = "";
 let searchKeyTimer;
 let updateNotification;
 let tray;
@@ -42,7 +49,19 @@ const ownsLock = app.requestSingleInstanceLock();
 if (!ownsLock) app.quit();
 app.on("second-instance", showWindow);
 
+function trackedDrives() {
+  return [...new Set((index?.roots() ?? []).map(({ path }) => /^[a-z]:/i.test(path) ? path[0].toUpperCase() : null).filter(Boolean))].sort();
+}
+
 function notifyChanged() {
+  if (ntfs && index) {
+    const drives = trackedDrives();
+    const key = drives.join("");
+    if (key !== lastTrackedDrives) {
+      lastTrackedDrives = key;
+      void ntfs.setTrackedDrives(drives).catch(() => {});
+    }
+  }
   if (window && !window.isDestroyed()) window.webContents.send("library:changed");
 }
 
@@ -72,7 +91,7 @@ function focusSearch() {
 function createTray() {
   let icon;
   try {
-    icon = new Tray(join(__dirname, "tray-icon.ico"));
+    icon = new Tray(appIcon() ?? join(__dirname, "tray-icon.ico"));
     icon.setToolTip("FileRecall");
     icon.setContextMenu(Menu.buildFromTemplate([
       { label: "打开 FileRecall", click: showWindow },
@@ -95,6 +114,12 @@ function createWindow() {
     minWidth: 760,
     minHeight: 520,
     title: "FileRecall",
+    backgroundColor: "#ffffff",
+    icon: appIcon(),
+    ...(process.platform === "win32" ? {
+      titleBarStyle: "hidden",
+      titleBarOverlay: { color: "#ffffff", symbolColor: "#526175", height: 52 },
+    } : {}),
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -124,6 +149,19 @@ app.whenReady().then(() => {
   if (!ownsLock) return;
   const userData = app.getPath("userData");
   const databasePath = join(userData, "files.sqlite");
+  diagnostics = createPerformanceDiagnostics(userData);
+  ipcMain.handle("diagnostics:get", () => diagnostics.snapshot());
+  ipcMain.handle("diagnostics:copy", () => {
+    clipboard.writeText(JSON.stringify(diagnostics.snapshot(), null, 2));
+    return true;
+  });
+  ipcMain.handle("diagnostics:reveal", () => {
+    shell.showItemInFolder(diagnostics.file);
+    return true;
+  });
+  ipcMain.handle("diagnostics:renderer-lag", (_event, lag) => {
+    diagnostics.recordRendererLag(lag);
+  });
   index = new FileIndex(databasePath);
   monitor = new DirectoryMonitor(index, { onChange: notifyChanged });
   const modelPath = join(userData, "models", "multilingual-e5-small");
@@ -133,33 +171,54 @@ app.whenReady().then(() => {
     const ntfsReader = join(process.resourcesPath, "native", "filerecall-ntfs.exe");
     if (existsSync(ntfsReader)) {
       try {
-        ntfs = new NtfsSearch(join(userData, "ntfs-index.sqlite"), userData, ntfsReader, {
+        ntfs = createNtfsService(join(userData, "ntfs-index.sqlite"), userData, ntfsReader, {
+          trackedDrives: trackedDrives(),
           onChange: (state) => send("ntfs:changed", state),
           onPaths: (drive, paths) => monitor.applyJournal(drive, paths),
           onActiveDrives: (drives) => monitor.setJournalDrives(drives),
+          onMetrics: (metrics) => diagnostics.setNtfsMetrics(metrics),
         });
+        lastTrackedDrives = trackedDrives().join("");
       } catch (error) {
         console.warn("NTFS index unavailable:", error.message);
       }
     }
   }
+  searches = createSearchService({
+    localDatabase: databasePath,
+    ntfsDatabase: ntfs ? join(userData, "ntfs-index.sqlite") : null,
+    applicationData: userData,
+    onMetric: (kind, durationMs) => diagnostics.recordSearch(kind, durationMs),
+  });
   const ntfsStatus = () => ntfs?.status() ?? { available: false, connected: false, drives: [] };
   ipcMain.handle("ntfs:status", ntfsStatus);
   ipcMain.handle("ntfs:connect", () => ntfs?.reconnect() ?? ntfsStatus());
   ipcMain.handle("ntfs:retry-auto", async () => { await ntfs?.retryAutomatically(); return ntfsStatus(); });
   ipcMain.handle("ntfs:enable", (_event, drive) => ntfs?.enable(drive) ?? ntfsStatus());
   ipcMain.handle("ntfs:disable", (_event, drive) => ntfs?.disable(drive) ?? ntfsStatus());
-  ipcMain.handle("ntfs:search", (_event, query) => ntfs?.search(query) ?? []);
+  ipcMain.handle("files:search-unified", (_event, query, favoritesOnly) => searches.searchUnified(
+    query, ntfs?.searchableDrives() ?? [], Boolean(favoritesOnly)));
+  ipcMain.handle("ntfs:favorite", async (_event, drive, id, enabled) => {
+    if (!ntfs || typeof enabled !== "boolean") return false;
+    const ok = await ntfs.favorite(drive, id, enabled);
+    if (ok) notifyChanged();
+    return ok;
+  });
+  ipcMain.handle("ntfs:search", (_event, query) => ntfs
+    ? searches.searchNtfs(query, ntfs.searchableDrives()) : []);
+  ipcMain.handle("ntfs:search-deep", (_event, query) => ntfs
+    ? searches.searchNtfsDeep(query, ntfs.searchableDrives()) : []);
   ipcMain.handle("ntfs:motw", async (_event, drive, id) => {
-    const path = ntfs?.target(drive, id);
+    const path = await ntfs?.target(drive, id);
     return path ? readMotw(path) : null;
   });
   ipcMain.handle("ntfs:reveal", async (_event, drive, id) => {
-    const path = ntfs?.target(drive, id);
+    const path = await ntfs?.target(drive, id);
     if (!path) return false;
     try {
-      if ((await lstat(path)).isSymbolicLink() || ntfs.target(drive, id) !== path) return false;
+      if ((await lstat(path)).isSymbolicLink() || await ntfs.target(drive, id) !== path) return false;
       shell.showItemInFolder(path);
+      void ntfs.recordUse(drive, id).catch(() => {});
       return true;
     } catch {
       return false;
@@ -253,7 +312,8 @@ app.whenReady().then(() => {
     return result;
   }));
   ipcMain.handle("downloads:search", async (_event, query, manager) => {
-    const rows = readDownloads((sources) => sources.search(query, manager), []);
+    // Live typing needs a small, cheap first page; each path status check is disk I/O.
+    const rows = readDownloads((sources) => sources.search(query, manager), []).slice(0, 80);
     return Promise.all(rows.map(async (row) => ({ ...row, pathStatus: await downloadPathStatus(row.path) })));
   });
   ipcMain.handle("downloads:open-source", async (_event, id) => {
@@ -306,7 +366,7 @@ app.whenReady().then(() => {
     }
     return results;
   }));
-  ipcMain.handle("files:search", (_event, query) => index.search(query));
+  ipcMain.handle("files:search", (_event, query) => searches.searchLocal(query));
   ipcMain.handle("files:motw", (_event, path) => index.motwEvidence(path));
   ipcMain.handle("files:text-enabled", () => index.textEnabled());
   ipcMain.handle("files:set-text-enabled", (_event, enabled) => monitor.run(() => {
@@ -330,12 +390,14 @@ app.whenReady().then(() => {
     const target = await fileTarget(path);
     if (!target) return unavailableFile;
     shell.showItemInFolder(target);
+    index.recordUse(path);
     return { ok: true };
   });
   ipcMain.handle("files:open", async (_event, path) => {
     const target = await fileTarget(path);
     if (!target) return unavailableFile;
     const error = await shell.openPath(target);
+    if (!error) index.recordUse(path);
     return error ? { ok: false, message: "系统无法打开此文件。" } : { ok: true };
   });
   ipcMain.handle("files:copy-path", async (_event, kind, key) => {
@@ -355,7 +417,7 @@ app.whenReady().then(() => {
   searchKeyTimer = every(() => {
     if (closing || !index) return;
     try {
-      const updated = index.backfillSearchKeys(250);
+      const updated = index.backfillSearchKeys(24);
       if (!updated) {
         stopEvery(searchKeyTimer);
         searchKeyTimer = undefined;
@@ -366,7 +428,7 @@ app.whenReady().then(() => {
       stopEvery(searchKeyTimer);
       searchKeyTimer = undefined;
     }
-  }, 100);
+  }, 350);
   searchKeyTimer.unref();
   // The window stays responsive while the read-only helper requests Windows authorization.
   if (ntfs) void ntfs.startAutomatically().catch(() => {});
@@ -394,7 +456,7 @@ app.on("before-quit", (event) => {
     event.preventDefault();
     if (closing) return;
     closing = true;
-    Promise.allSettled([monitor.close(), ntfsClosing]).then(() => {
+    Promise.allSettled([monitor.close(), ntfsClosing, searches?.close(), diagnostics?.close()]).then(() => {
       index?.close();
       index = undefined;
       quitReady = true;

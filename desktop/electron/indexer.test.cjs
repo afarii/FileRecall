@@ -543,3 +543,31 @@ test("pinyin lookup supports full spelling, initials, extension AND and short pr
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+
+test("recently used Chinese initials outrank incidental system filename prefixes", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "filerecall-usage-test-"));
+  const folder = join(workspace, "files");
+  const database = join(workspace, "index.sqlite");
+  let index;
+  try {
+    await mkdir(folder);
+    const report = join(folder, "实验报告.pdf");
+    await writeFile(report, "report");
+    await writeFile(join(folder, "system.sys"), "driver");
+    index = new FileIndex(database);
+    await index.addRoot(folder);
+    assert.ok(index.search("sy").some((file) => file.name === "实验报告.pdf"));
+    index.recordUse(report);
+    index.recordUse(report);
+    index.recordUse(report);
+    assert.equal(index.search("sy")[0].name, "实验报告.pdf");
+    assert.equal(index.search("sy")[0].useCount, 3);
+    index.close();
+    index = new FileIndex(database);
+    assert.equal(index.search("sy")[0].name, "实验报告.pdf");
+  } finally {
+    index?.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

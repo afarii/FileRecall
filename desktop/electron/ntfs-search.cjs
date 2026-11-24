@@ -19,7 +19,7 @@ function validateVolume(info) {
 
 class NtfsSearch {
   constructor(database, userData, executable, { onChange, onPaths, onActiveDrives,
-    createReader = startNtfsReader, discoverDrives = discoverFixedNtfsDrives }) {
+    createReader = startNtfsReader, discoverDrives = discoverFixedNtfsDrives, trackedDrives }) {
     this.catalog = new NtfsCatalog(database, userData);
     this.executable = executable;
     this.createReader = createReader;
@@ -29,6 +29,7 @@ class NtfsSearch {
     this.onChange = onChange;
     this.onPaths = onPaths;
     this.onActiveDrives = onActiveDrives;
+    this.trackedDrives = Array.isArray(trackedDrives) ? new Set(trackedDrives) : null;
     this.sessions = new Map();
     this.tail = Promise.resolve();
     this.interval = setInterval(() => this.schedulePoll(), 3000);
@@ -38,7 +39,7 @@ class NtfsSearch {
     this.searchKeyTimer = setInterval(() => {
       if (this.closed) return;
       try {
-        const updated = this.catalog.backfillSearchKeys(200);
+        const updated = this.catalog.backfillSearchKeys(24);
         if (!updated) {
           clearInterval(this.searchKeyTimer);
           this.searchKeyTimer = undefined;
@@ -49,18 +50,24 @@ class NtfsSearch {
         clearInterval(this.searchKeyTimer);
         this.searchKeyTimer = undefined;
       }
-    }, 80);
+    }, 350);
     this.searchKeyTimer.unref();
   }
 
   status() {
+    const excluded = new Set(this.catalog.excluded());
     return {
       available: true,
       autoPhase: this.autoPhase,
       autoMessage: this.autoMessage,
       connected: Boolean(this.reader && !this.reader.closed),
-      drives: this.catalog.drives().map(({ drive }) => ({
-        drive, ...(this.sessions.get(drive) ?? { phase: "disconnected" }),
+      drives: this.catalog.drives().map(({ drive, cursor, build_position }) => ({
+        drive, ...(excluded.has(drive)
+          ? { phase: "paused", message: "已暂停，原有索引保留在本机" }
+          : this.sessions.get(drive) ?? (build_position !== null
+            ? { phase: "cached", message: "从上次进度继续建立索引" }
+            : cursor ? { phase: "cached", message: "已恢复原有索引，正在核对变更" }
+              : { phase: "disconnected" })),
       })).map(({ drive, phase, message }) => ({ drive, phase, message })),
     };
   }
@@ -179,7 +186,7 @@ class NtfsSearch {
       this.catalog.disable(drive);
       this.sessions.delete(drive);
       this.cancelled.delete(drive);
-      if (!this.catalog.drives().length) this.reader?.close();
+      if (!this.catalog.activeDrives().length) this.reader?.close();
       this.notify();
       return this.status();
     });
@@ -197,7 +204,7 @@ class NtfsSearch {
     void this.enqueue(async () => {
       let incomplete = false;
       try {
-        for (const drive of this.catalog.drives()) {
+        for (const drive of this.catalog.activeDrives()) {
           if (this.closed || this.reader.closed) break;
           try {
             // Bounded round-robin slices keep D:/E:/F: progressing while C: builds.
@@ -212,7 +219,7 @@ class NtfsSearch {
         this.polling = false;
         if (incomplete && !this.closed) {
           clearTimeout(this.nextPoll);
-          this.nextPoll = setTimeout(() => this.schedulePoll(), 0);
+          this.nextPoll = setTimeout(() => this.schedulePoll(), 120);
           this.nextPoll.unref();
         }
       }
@@ -232,8 +239,14 @@ class NtfsSearch {
     if (state.build_position !== null || !cursor || BigInt(cursor) < BigInt(info.first) ||
         BigInt(cursor) > BigInt(info.next) || live?.phase === "rebuild") {
       const wasBuilding = live?.phase === "building";
+      const continuing = state.build_position !== null;
       if (!wasBuilding) {
-        this.sessions.set(drive, { phase: "building", message: "正在扫描 MFT 文件记录…" });
+        const reason = continuing ? "继续上次未完成的索引"
+          : !cursor ? "首次建立文件名索引"
+            : state.journal !== info.journal ? "NTFS 变更日志已替换，正在重新建立索引"
+              : BigInt(cursor) < BigInt(info.first) ? "变更日志已过期，正在重新建立索引"
+                : "正在校正文件名索引";
+        this.sessions.set(drive, { phase: "building", message: reason });
         this.notify();
       }
       let position = this.catalog.beginBuild(drive, info.journal, info.next);
@@ -253,14 +266,22 @@ class NtfsSearch {
           break;
         }
         if (!batch.next || BigInt(batch.next) <= BigInt(position)) throw new Error("MFT 枚举进度未前进。");
-        this.catalog.apply(drive, batch.rows, true, undefined, batch.next);
+        // Commit complete cursor positions only. Allow renderer events between
+        // bounded SQLite inserts and pinyin conversion batches.
+        for (let offset = 0; offset < batch.rows.length; offset += 192) {
+          const slice = batch.rows.slice(offset, offset + 192);
+          const isLast = offset + slice.length === batch.rows.length;
+          this.catalog.apply(drive, slice, true, undefined, isLast ? batch.next : undefined);
+          await new Promise((resolve) => setTimeout(resolve, 8));
+        }
+        if (!batch.rows.length) this.catalog.apply(drive, [], true, undefined, batch.next);
         processed += batch.rows.length;
         position = batch.next;
       }
       if (this.closed || this.cancelled?.has(drive)) return false;
       if (!finished) {
         this.sessions.set(drive, { phase: "building", processed,
-          message: `已扫描 ${processed.toLocaleString("zh-CN")} 条文件记录` });
+          message: `${continuing ? "继续索引" : "已扫描"} ${processed.toLocaleString("zh-CN")} 条文件记录` });
         this.notify();
         return true;
       }
@@ -268,17 +289,26 @@ class NtfsSearch {
     const latest = info.next;
     for (let page = 0; page < 12 && !this.closed && !this.cancelled?.has(drive); page++) {
       if (BigInt(cursor) >= BigInt(latest)) break;
-      const batch = await this.reader.request("read", drive, info.volume, info.journal, cursor);
+      const needsPaths = !this.trackedDrives || this.trackedDrives.has(drive);
+      const batch = await this.reader.request(needsPaths ? "read" : "read-names", drive, info.volume, info.journal, cursor);
       if (!batch.next || BigInt(batch.next) < BigInt(cursor)) throw new Error("USN 读取进度无效。");
-      const paths = this.catalog.changedPaths(drive, batch.rows);
-      if (paths.length) await this.onPaths(drive, paths);
+      if (needsPaths) {
+        const paths = this.catalog.changedPaths(drive, batch.rows);
+        if (paths.length) await this.onPaths(drive, paths);
+      }
       if (this.closed || this.cancelled?.has(drive)) return false;
       if (this.catalog.shouldRebuild(drive, batch.rows)) {
         this.sessions.set(drive, { phase: "rebuild" });
         this.notify();
         return true;
       }
-      this.catalog.apply(drive, batch.rows, false, info.journal, batch.next);
+      for (let offset = 0; offset < batch.rows.length; offset += 192) {
+        const slice = batch.rows.slice(offset, offset + 192);
+        const isLast = offset + slice.length === batch.rows.length;
+        this.catalog.apply(drive, slice, false, info.journal, isLast ? batch.next : undefined);
+        await new Promise((resolve) => setTimeout(resolve, 4));
+      }
+      if (!batch.rows.length) this.catalog.checkpoint(drive, info.journal, batch.next);
       if (batch.next === cursor) throw new Error("USN 读取进度未前进。");
       cursor = batch.next;
     }
@@ -289,15 +319,24 @@ class NtfsSearch {
     return phase === "catching-up";
   }
 
+  searchableDrives() {
+    return this.catalog.activeDrives().flatMap(({ drive, cursor, build_position }) => {
+      const phase = this.sessions.get(drive)?.phase;
+      if (phase === "error") return [];
+      const live = Boolean(this.reader && !this.reader.closed &&
+        ["ready", "building", "catching-up"].includes(phase));
+      // The on-disk snapshot remains usable while UAC and journal verification
+      // happen. Only file actions require a validated live reader.
+      const cached = !live && Boolean(cursor || build_position !== null);
+      return live || cached ? [{ drive, cached }] : [];
+    });
+  }
+
   search(rawQuery) {
     const query = typeof rawQuery === "string" ? rawQuery.trim().slice(0, 200) : "";
     if (!query) return [];
     const matches = [];
-    for (const driveEntry of this.catalog.drives()) {
-      const { drive } = driveEntry;
-      const live = Boolean(this.reader && !this.reader.closed && ["ready", "building"].includes(this.sessions.get(drive)?.phase));
-      const cached = Boolean(!this.sessions.has(drive) && driveEntry.cursor && (!this.reader || this.reader.closed));
-      if (!live && !cached) continue;
+    for (const { drive, cached } of this.searchableDrives()) {
       matches.push(...this.catalog.search(drive, query).map((row) => ({
         id: row.id, drive, path: fullPath(row), name: row.name,
         directory: Boolean(row.isDirectory), cached,

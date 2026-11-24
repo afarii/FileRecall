@@ -8,6 +8,10 @@ const subscribe = (channel, callback) => {
 };
 
 contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
+  performanceReport: () => ipcRenderer.invoke("diagnostics:get"),
+  copyPerformanceReport: () => ipcRenderer.invoke("diagnostics:copy"),
+  revealPerformanceLog: () => ipcRenderer.invoke("diagnostics:reveal"),
+  reportRendererLag: (ms) => ipcRenderer.invoke("diagnostics:renderer-lag", ms),
   folders: () => ipcRenderer.invoke("folders:list"),
   historyFolders: () => ipcRenderer.invoke("history:folders"),
   clearHistory: (path) => ipcRenderer.invoke("history:clear", path),
@@ -15,6 +19,8 @@ contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   addFolder: () => ipcRenderer.invoke("folders:add"),
   rescan: () => ipcRenderer.invoke("folders:rescan"),
   search: (query) => ipcRenderer.invoke("files:search", query),
+  unifiedSearch: (query, favoritesOnly) => ipcRenderer.invoke("files:search-unified", query, favoritesOnly),
+  favoriteNtfs: (drive, id, enabled) => ipcRenderer.invoke("ntfs:favorite", drive, id, enabled),
   textEnabled: () => ipcRenderer.invoke("files:text-enabled"),
   setTextEnabled: (enabled) => ipcRenderer.invoke("files:set-text-enabled", enabled),
   downloads: (query, manager) => ipcRenderer.invoke("downloads:search", query, manager),
@@ -50,6 +56,7 @@ contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   enableNtfs: (drive) => ipcRenderer.invoke("ntfs:enable", drive),
   disableNtfs: (drive) => ipcRenderer.invoke("ntfs:disable", drive),
   searchNtfs: (query) => ipcRenderer.invoke("ntfs:search", query),
+  searchNtfsDeep: (query) => ipcRenderer.invoke("ntfs:search-deep", query),
   retryAutoNtfs: () => ipcRenderer.invoke("ntfs:retry-auto"),
   ntfsMotw: (drive, id) => ipcRenderer.invoke("ntfs:motw", drive, id),
   localMotw: (path) => ipcRenderer.invoke("files:motw", path),
