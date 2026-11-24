@@ -59,7 +59,7 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData, onM
     worker.on("error", fail);
     worker.on("exit", (code) => fail(new Error("搜索线程已退出：" + code)));
 
-    function request(query, drives = [], kind = searchKind) {
+    function request(query, drives = [], kind = searchKind, favoritesOnly = false) {
       if (stopped) return Promise.reject(new Error("搜索服务已停止"));
       const id = ++sequence;
       return new Promise((resolve, reject) => {
@@ -71,7 +71,7 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData, onM
         timer.unref();
         pending.set(id, { resolve, reject, timer, startedAt: Date.now() });
         worker.ref();
-        const job = { id, kind, query, drives };
+        const job = { id, kind, query, drives, favoritesOnly };
         if (coalesce && inFlight !== null) {
           // At most one waiting query. Old input is never worth a new scan.
           if (queued) {
@@ -107,6 +107,7 @@ function createSearchService({ localDatabase, ntfsDatabase, applicationData, onM
   let deep;
   return {
     searchLocal: (query) => local.request(query),
+    searchUnified: (query, drives, favoritesOnly = false) => ntfs.request(query, drives, "unified", favoritesOnly),
     searchNtfs: (query, drives) => ntfs.request(query, drives),
     // Spawn only when prefix search has no hits. Slow substring scans stay
     // isolated so that subsequent keystrokes can still return immediately.
