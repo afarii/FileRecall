@@ -320,9 +320,11 @@ export default function App() {
     const current: UnifiedRecord[] = [];
     const history: UnifiedRecord[] = [];
     for (const record of [...filenameRecords, ...downloads]) {
+      // A download history entry proves a past transfer, while current-file
+      // identity comes from the file index. Keep provenance-only rows together.
       const historical = record.type === "local"
         ? record.file.status === "missing" && !record.file.currentPath
-        : record.type === "download" ? record.file.pathStatus !== "present" : false;
+        : record.type === "download";
       (historical ? history : current).push(record);
     }
     if (!semanticMode) {
