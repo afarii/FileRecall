@@ -4,7 +4,7 @@ const { lstat } = require("node:fs/promises");
 const { createHash } = require("node:crypto");
 const { win32 } = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
-const { queryTerms, termGroups, termCondition } = require("./filename-search.cjs");
+const { queryTerms, termGroups, termCondition } = require("./query-terms.cjs");
 
 const trusted = new Set(["matched", "confirmed", "manual"]);
 const sourceStates = new Set([...trusted, "candidate", "unknown", "rejected"]);
