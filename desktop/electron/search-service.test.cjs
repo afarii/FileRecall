@@ -38,6 +38,8 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
     { id: "80", parent: "5", directory: "E:\\", name: "md1.txt", attributes: 0, reason: 0 },
     { id: "81", parent: "5", directory: "E:\\", name: "md-md-md-md-md.txt", attributes: 0, reason: 0 },
     { id: "82", parent: "5", directory: "E:\\", name: "实验报告.docx", attributes: 0, reason: 0 },
+    { id: "83", parent: "5", directory: "E:\\", name: "alpha-beta.txt", attributes: 0, reason: 0 },
+    { id: "84", parent: "5", directory: "E:\\", name: "beta-alpha.txt", attributes: 0, reason: 0 },
   ], true);
   assert.ok((await search.searchLocal("sy")).some((item) => item.name === "实验报告.pdf"));
   local.recordUse(report);
@@ -50,8 +52,13 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
   const drives = [{ drive: "E", cached: false }];
   for (const query of ["sy pdf", "pdf sy", "sy pd", "pd sy", "sybg pdf", "shiyan pdf", "实验 pdf", "pdf 实验"]) {
     const hits = await search.searchUnified(query, drives);
-    assert.ok(hits.some(({ file }) => file.name === "实验报告.pdf"), query);
+    assert.ok(hits.some(({ type, file }) => type === "ntfs" && file.name === "实验报告.pdf"), query + " must match NTFS, not the legacy index");
     assert.ok(!hits.some(({ file }) => file.name === "实验报告.docx"), query);
+  }
+  for (const query of ["alpha beta", "beta alpha"]) {
+    const hits = await search.searchUnified(query, drives);
+    assert.deepEqual(hits.filter(({ type }) => type === "ntfs").map(({ file }) => file.name).sort(),
+      ["alpha-beta.txt", "beta-alpha.txt"], query);
   }
   const repeat = await search.searchUnified("md md md md md", drives);
   assert.ok(repeat.some(({ file }) => file.name === "md-md-md-md-md.txt"));
