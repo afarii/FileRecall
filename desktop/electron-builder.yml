@@ -27,6 +27,7 @@ extraResources:
     filter:
       - native-host.cjs
       - download-sources.cjs
+      - query-terms.cjs
 win:
   executableName: FileRecall
   electronLanguages:
