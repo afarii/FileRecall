@@ -108,6 +108,10 @@ test("slow download-source results run in their own worker and are searchable by
   assert.equal(bySite.length, 1);
   assert.equal(bySite[0].name, "old.pdf");
   assert.equal(bySite[0].canOpenSource, true);
+  for (const query of ["old example.org", "example.org old", "课程 pdf"]) {
+    assert.equal((await search.searchDownloads(query)).length, 1, query);
+  }
+  assert.equal((await search.searchDownloads("old old old old old")).length, 0);
   assert.equal((await search.searchDownloads("missingkeyword")).length, 0);
   // The primary filename worker remains independently usable.
   assert.deepEqual(await search.searchUnified("old", []), []);
