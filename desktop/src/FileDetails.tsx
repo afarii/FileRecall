@@ -152,7 +152,8 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
           </dl>
           <div className="actions">
             {confirmed.canOpenSource && <button onClick={() => void openLinkedSource(confirmed.id)}>
-              {confirmed.manager === "aria2" ? "打开下载地址" : "打开来源页面"} ↗</button>}
+              {record.file.status === "missing" && !record.file.currentPath
+                ? "查看来源，尝试找回" : confirmed.manager === "aria2" ? "打开下载地址" : "打开来源页面"} ↗</button>}
             <button className="secondary" disabled={deciding} onClick={() => void decideSource(confirmed.id, "undo")}>撤销关联</button>
           </div>
         </> : <p className="muted">{provenance ? "来源未知" : "正在读取来历…"}</p>}
@@ -192,7 +193,8 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
         <p>{[record.file.domain, record.file.sourceTitle].filter(Boolean).join(" · ") || status.label}</p>
         {record.file.manager === "aria2" && <p className="muted">下载器只提供任务地址，来源网页未知。</p>}
         {record.file.canOpenSource && <button onClick={() => openSource(record.file.id)}>
-          {record.file.manager === "aria2" ? "打开下载地址" : "打开来源页面"} ↗</button>}
+          {record.file.pathStatus === "missing" ? "查看来源，尝试找回"
+            : record.file.manager === "aria2" ? "打开下载地址" : "打开来源页面"} ↗</button>}
         {record.file.sourceStatus === "candidate" && <p className="muted">可在 Chrome 扩展中核对来源。</p>}
       </section>
     </>}

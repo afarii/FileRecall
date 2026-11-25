@@ -22,10 +22,6 @@ function nameSearchKeys(name) {
   return { pinyin: full, initials };
 }
 
-function queryTerms(query) {
-  if (typeof query !== "string") return [];
-  return query.trim().toLowerCase().slice(0, 200).split(/\s+/u)
-    .filter(Boolean).slice(0, 12);
-}
+const { queryTerms, termGroups, termCondition } = require("./query-terms.cjs");
 
-module.exports = { nameSearchKeys, queryTerms };
+module.exports = { nameSearchKeys, queryTerms, termGroups, termCondition };

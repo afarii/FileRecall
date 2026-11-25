@@ -287,6 +287,7 @@ class NtfsSearch {
       }
     }
     const latest = info.next;
+    let catalogChanged = false;
     for (let page = 0; page < 12 && !this.closed && !this.cancelled?.has(drive); page++) {
       if (BigInt(cursor) >= BigInt(latest)) break;
       const needsPaths = !this.trackedDrives || this.trackedDrives.has(drive);
@@ -305,7 +306,7 @@ class NtfsSearch {
       for (let offset = 0; offset < batch.rows.length; offset += 192) {
         const slice = batch.rows.slice(offset, offset + 192);
         const isLast = offset + slice.length === batch.rows.length;
-        this.catalog.apply(drive, slice, false, info.journal, isLast ? batch.next : undefined);
+        catalogChanged = this.catalog.apply(drive, slice, false, info.journal, isLast ? batch.next : undefined) || catalogChanged;
         await new Promise((resolve) => setTimeout(resolve, 4));
       }
       if (!batch.rows.length) this.catalog.checkpoint(drive, info.journal, batch.next);
@@ -315,7 +316,8 @@ class NtfsSearch {
     if (this.closed || this.cancelled?.has(drive)) return false;
     const phase = BigInt(cursor) >= BigInt(latest) ? "ready" : "catching-up";
     this.sessions.set(drive, { phase, journal: info.journal, cursor });
-    if (phase !== live?.phase) this.notify();
+    // Even ready -> ready can contain new or renamed files. Refresh the live query.
+    if (catalogChanged || phase !== live?.phase) this.notify();
     return phase === "catching-up";
   }
 

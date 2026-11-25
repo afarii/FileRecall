@@ -4,6 +4,7 @@ const { lstat } = require("node:fs/promises");
 const { createHash } = require("node:crypto");
 const { win32 } = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
+const { queryTerms, termGroups, termCondition } = require("./query-terms.cjs");
 
 const trusted = new Set(["matched", "confirmed", "manual"]);
 const sourceStates = new Set([...trusted, "candidate", "unknown", "rejected"]);
@@ -124,13 +125,15 @@ class DownloadSources {
   }
 
   search(query, manager) {
-    const needle = typeof query === "string" ? query.trim().slice(0, 200).toLowerCase() : "";
+    const terms = termGroups(queryTerms(query)).map(({ term, count }) => termCondition(["search_text"], term, count));
+    const where = terms.map(({ where }) => where).join(" AND ") || "1";
+    const args = terms.flatMap(({ args }) => args);
     const scope = manager === "chrome" || manager === "aria2" ? manager : null;
     return this.db.prepare(`
       SELECT ${sourceColumns}, manager
-      FROM (${this.allSources()}) WHERE instr(search_text, ?) > 0 AND (? IS NULL OR manager = ?)
+      FROM (${this.allSources()}) WHERE ${where} AND (? IS NULL OR manager = ?)
       ORDER BY started_at DESC, id LIMIT 200
-    `).all(needle, scope, scope).map(publicRecord);
+    `).all(...args, scope, scope).map(publicRecord);
   }
 
   byId(id) {

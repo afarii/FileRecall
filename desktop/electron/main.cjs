@@ -187,6 +187,7 @@ app.whenReady().then(() => {
   searches = createSearchService({
     localDatabase: databasePath,
     ntfsDatabase: ntfs ? join(userData, "ntfs-index.sqlite") : null,
+    downloadsDatabase: join(userData, "browser-downloads.sqlite"),
     applicationData: userData,
     onMetric: (kind, durationMs) => diagnostics.recordSearch(kind, durationMs),
   });
@@ -196,8 +197,9 @@ app.whenReady().then(() => {
   ipcMain.handle("ntfs:retry-auto", async () => { await ntfs?.retryAutomatically(); return ntfsStatus(); });
   ipcMain.handle("ntfs:enable", (_event, drive) => ntfs?.enable(drive) ?? ntfsStatus());
   ipcMain.handle("ntfs:disable", (_event, drive) => ntfs?.disable(drive) ?? ntfsStatus());
-  ipcMain.handle("files:search-unified", (_event, query, favoritesOnly) => searches.searchUnified(
-    query, ntfs?.searchableDrives() ?? [], Boolean(favoritesOnly)));
+  ipcMain.handle("files:search-unified", (_event, query, favoritesOnly, deep) =>
+    (deep === true ? searches.searchUnifiedDeep : searches.searchUnified)(
+      query, ntfs?.searchableDrives() ?? [], Boolean(favoritesOnly)));
   ipcMain.handle("ntfs:favorite", async (_event, drive, id, enabled) => {
     if (!ntfs || typeof enabled !== "boolean") return false;
     const ok = await ntfs.favorite(drive, id, enabled);
@@ -313,8 +315,12 @@ app.whenReady().then(() => {
   }));
   ipcMain.handle("downloads:search", async (_event, query, manager) => {
     // Live typing needs a small, cheap first page; each path status check is disk I/O.
-    const rows = readDownloads((sources) => sources.search(query, manager), []).slice(0, 80);
-    return Promise.all(rows.map(async (row) => ({ ...row, pathStatus: await downloadPathStatus(row.path) })));
+    const rows = await searches.searchDownloads(query);
+    const scoped = manager === "chrome" || manager === "aria2"
+      ? rows.filter((row) => row.manager === manager) : rows;
+    return Promise.all(scoped.map(async (row) => ({
+      ...row, pathStatus: await downloadPathStatus(row.path),
+    })));
   });
   ipcMain.handle("downloads:open-source", async (_event, id) => {
     const url = readDownloads((sources) => sources.sourceToOpen(id), null);

@@ -200,6 +200,18 @@ body { background: var(--fr-paper); }
 .file-tile[data-kind="archive"] { background: #edf0f4; color: #566579; }
 .file-tile[data-kind="system"] { background: #f3f3f4; color: #7f8790; }
 .show-more { margin-top: 9px; width: 100%; }
+.history-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0 18px;
+  padding: 13px 14px;
+  text-align: left;
+  border-radius: 10px;
+}
+.history-toggle span { color: var(--fr-muted); font-size: 18px; line-height: 1; }
+
 .file-details { background: #fbfcff; border-color: var(--fr-line); }
 .settings-view { max-width: 730px; padding-top: 30px; }
 .settings-view h1 { font-size: 25px; margin-bottom: 7px; }

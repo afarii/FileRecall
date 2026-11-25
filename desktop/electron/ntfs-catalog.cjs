@@ -2,7 +2,7 @@
 
 const { DatabaseSync } = require("node:sqlite");
 const { win32 } = require("node:path");
-const { nameSearchKeys, queryTerms } = require("./filename-search.cjs");
+const { nameSearchKeys, queryTerms, termGroups, termCondition } = require("./filename-search.cjs");
 
 const DIRECTORY = 0x10;
 const DELETE = 0x200;
@@ -210,8 +210,8 @@ class NtfsCatalog {
   }
 
   apply(drive, rows, snapshot, journal, cursor) {
-    if (!rows.length && !(snapshot && cursor !== undefined)) return;
-    this.transaction(() => {
+    if (!rows.length && !(snapshot && cursor !== undefined)) return false;
+    return this.transaction(() => {
       const saveParent = this.db.prepare(`
         INSERT INTO ntfs_parent VALUES (?, ?, ?, ?)
         ON CONFLICT (drive, id) DO UPDATE SET path = excluded.path, folded = excluded.folded
@@ -263,6 +263,7 @@ class NtfsCatalog {
         this.db.prepare("UPDATE ntfs_drive SET build_position = ? WHERE drive = ?").run(cursor, drive);
       }
       if (!snapshot && cursor !== undefined) this.checkpoint(drive, journal, cursor);
+      return changed;
     });
   }
 
@@ -364,7 +365,13 @@ class NtfsCatalog {
   search(drive, query, { fastOnly = false } = {}) {
     const terms = queryTerms(query);
     if (!terms.length) return [];
-    const rawPrimary = [...terms].sort((a, b) => b.length - a.length)[0];
+    // File extensions usually occur at the end, so anchor indexed candidates
+    // on a filename/phonetic token before filtering by extension.
+    const extensions = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "zip", "rar", "7z", "png", "jpg", "jpeg", "gif", "mp3", "mp4", "html", "json", "csv", "exe", "dll", "sys"];
+    const isExtension = (term) => extensions.includes(term.replace(/^\./, ""));
+    const orderedTerms = [...new Set(terms)].sort((a, b) =>
+      Number(isExtension(a)) - Number(isExtension(b)) || b.length - a.length || a.localeCompare(b));
+    const rawPrimary = orderedTerms[0];
     // Split explicit path queries so we can still use the indexed filename
     // prefix instead of scanning every path on disk.
     const pathParts = rawPrimary.replaceAll("/", "\\");
@@ -372,7 +379,8 @@ class NtfsCatalog {
     const directoryHint = separator >= 0 ? pathParts.slice(0, separator) : "";
     const primary = separator >= 0 ? pathParts.slice(separator + 1) : rawPrimary;
     if (!primary) return [];
-    const upper = primary + "\uffff";
+    const anchors = [...new Set(orderedTerms.map((word) =>
+      word.replaceAll("/", "\\").split("\\").at(-1)))].filter(Boolean).slice(0, 3);
     const columns = "SELECT i.id, i.parent, i.name, i.folded, i.pinyin, i.initials," +
       " p.path AS directory, i.directory AS isDirectory," +
       " coalesce(u.use_count, 0) AS useCount, coalesce(u.last_used_at, 0) AS lastUsedAt," +
@@ -383,23 +391,19 @@ class NtfsCatalog {
     function filters(words) {
       const clauses = [];
       const args = [];
-      for (const term of words) {
-        if (term.includes("/") || term.includes("\\")) {
-          clauses.push("instr(rtrim(p.folded, char(92)) || char(92) || i.folded, ?) > 0");
-          args.push(term.replaceAll("/", "\\"));
-        } else if (!/^[a-z0-9]+$/u.test(term)) {
-          // Han characters or punctuation can only appear in the literal filename.
-          clauses.push("instr(i.folded, ?) > 0");
-          args.push(term);
-        } else {
-          clauses.push("(instr(i.folded, ?) > 0 OR instr(i.pinyin, ?) > 0 OR instr(i.initials, ?) > 0)");
-          args.push(term, term, term);
-        }
+      for (const { term, count } of termGroups(words)) {
+        const path = term.includes("/") || term.includes("\\");
+        const keys = path ? ["rtrim(p.folded, char(92)) || char(92) || i.folded"]
+          : /^[a-z0-9]+$/u.test(term) ? ["i.folded", "i.pinyin", "i.initials"] : ["i.folded"];
+        const condition = termCondition(keys, path ? term.replaceAll("/", "\\") : term, count);
+        clauses.push(condition.where);
+        args.push(...condition.args);
       }
       return { where: clauses.join(" AND ") || "1", args };
     }
 
-    const others = filters(terms.filter((term) => term !== rawPrimary));
+    // Include the primary word too: a prefix match alone does not satisfy repeated words.
+    const others = filters(terms);
     if (directoryHint) {
       others.where = (others.where === "1" ? "" : others.where + " AND ") +
         "instr(p.folded, ?) > 0";
@@ -434,32 +438,35 @@ class NtfsCatalog {
 
     // Very short romanized queries are often Chinese filename initials (e.g. sy -> 实验).
     // Keep indexed prefix scans so typing remains responsive on large volumes.
-    const columnsToTry = /^[a-z0-9]+$/u.test(primary)
-      ? (primary.length <= 2 ? ["i.initials", "i.folded", "i.pinyin"]
-        : ["i.folded", "i.pinyin", "i.initials"]) : ["i.folded"];
-    for (const column of columnsToTry) {
+    // Multiple words can occur in either order in the filename. Try bounded
+    // indexed ranges for several anchors; every candidate still satisfies all terms.
+    for (const anchor of anchors) {
+      const columnsToTry = /^[a-z0-9]+$/u.test(anchor)
+        ? (anchor.length <= 2 ? ["i.initials", "i.folded", "i.pinyin"]
+          : ["i.folded", "i.pinyin", "i.initials"]) : ["i.folded"];
+      for (const column of columnsToTry) {
+        if (results.length >= 100) break;
+        const index = { "i.folded": "ntfs_item_name", "i.initials": "ntfs_item_initials", "i.pinyin": "ntfs_item_pinyin" }[column];
+        // Materialize a bounded indexed range BEFORE joins and secondary filters.
+        // Otherwise SQLite can choose a drive-wide scan on a broad prefix,
+        // especially when its statistics do not reflect a large MFT catalog.
+        const key = column.slice(2);
+        const sql = "WITH candidates AS MATERIALIZED (SELECT * FROM ntfs_item INDEXED BY " + index +
+          " WHERE drive = ? AND " + key + " >= ? AND " + key + " < ? LIMIT ?) " +
+          columns + " " + from.replace("ntfs_item i", "candidates i") +
+          " WHERE " + others.where + " LIMIT ?";
+        const matches = this.db.prepare(sql).all(drive, anchor, anchor + "\uffff",
+          fastOnly ? 768 : 8192, ...others.args, 100 - results.length);
+        collect(matches);
+      }
       if (results.length >= 100) break;
-      const index = { "i.folded": "ntfs_item_name", "i.initials": "ntfs_item_initials", "i.pinyin": "ntfs_item_pinyin" }[column];
-      // Materialize a bounded indexed range BEFORE joins and secondary filters.
-      // Otherwise SQLite can choose a drive-wide scan on a broad prefix,
-      // especially when its statistics do not reflect a large MFT catalog.
-      const key = column.slice(2);
-      const sql = "WITH candidates AS MATERIALIZED (SELECT * FROM ntfs_item INDEXED BY " + index +
-        " WHERE drive = ? AND " + key + " >= ? AND " + key + " < ? LIMIT ?) " +
-        columns + " " + from.replace("ntfs_item i", "candidates i") +
-        " WHERE " + others.where + " LIMIT ?";
-      const matches = this.db.prepare(sql).all(drive, primary, upper,
-        fastOnly ? 768 : 8192, ...others.args, 100 - results.length);
-      collect(matches);
     }
     // Short initials such as "sy" are handled by indexed prefix scans. Avoid an
     // O(entire disk) infix scan on each keystroke while an input is still changing.
     // The UI's fast path never performs an entire-volume substring scan.
     // Keep the complete scan available for explicit deep search and the
     // compatibility API, without putting it on the keystroke hot path.
-    if (fastOnly || results.length >= 100 ||
-        (primary.length <= 2 && /^[a-z0-9]+$/u.test(primary)) ||
-        results.length >= 40) return rank(results);
+    if (fastOnly || results.length >= 40) return rank(results);
     const all = filters(terms);
     const infix = this.db.prepare(columns + " " + from +
       " WHERE i.drive = ? AND " + all.where + " LIMIT 200").all(drive, ...all.args);

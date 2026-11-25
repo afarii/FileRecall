@@ -11,6 +11,7 @@ const row = (id, parent, directory, name, { attributes = 0, reason = 0 } = {}) =
 test("NTFS resumes changes, moves directory descendants and rebuilds if the journal rolls over", async (t) => {
   const requests = [];
   const affected = [];
+  let notifications = 0;
   let metadata = { volume: testVolume, journal: "42", first: "5", next: "10" };
   let snapshot = [
     row("51", "5", "E:\\", "Old", { attributes: 16 }),
@@ -34,7 +35,7 @@ test("NTFS resumes changes, moves directory descendants and rebuilds if the jour
   };
   const service = new NtfsSearch(":memory:", "E:\\FileRecall-data", "", {
     createReader: async () => reader,
-    onChange() {},
+    onChange() { notifications++; },
     onPaths: async (_drive, paths) => affected.push(...paths),
     onActiveDrives() {},
   });
@@ -53,6 +54,18 @@ test("NTFS resumes changes, moves directory descendants and rebuilds if the jour
   assert.equal(service.search("pdf nonexistent").length, 0);
   assert.equal(service.search("old\\report")[0].path, "E:\\Old\\report中文.txt");
   assert.deepEqual(service.search("ntfs-index"), []);
+
+  // A file created after the initial MFT snapshot must arrive through USN,
+  // and an already-open search must be notified while phase remains ready.
+  const beforeCreate = notifications;
+  metadata = { ...metadata, next: "15" };
+  changes = [row("81", "51", "E:\\Old", "new-download-regression.pdf", { reason: 0x100 })];
+  service.schedulePoll();
+  await service.tail;
+  assert.equal(service.status().drives[0].phase, "ready");
+  assert.equal(service.catalog.search("E", "new-download-regression", { fastOnly: true })[0].name,
+    "new-download-regression.pdf");
+  assert.ok(notifications > beforeCreate, "ready-to-ready USN commit must refresh active searches");
 
   metadata = { ...metadata, next: "25" };
   changes = [
