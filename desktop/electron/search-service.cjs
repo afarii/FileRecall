@@ -113,6 +113,10 @@ function createSearchService({ localDatabase, ntfsDatabase, downloadsDatabase, a
       return downloads.request(query, [], "downloads");
     },
     searchUnified: (query, drives, favoritesOnly = false) => ntfs.request(query, drives, "unified", favoritesOnly),
+    searchUnifiedDeep: (query, drives, favoritesOnly = false) => {
+      deep ??= createChannel("ntfs-deep");
+      return deep.request(query, drives, "unified-deep", favoritesOnly);
+    },
     searchNtfs: (query, drives) => ntfs.request(query, drives),
     // Spawn only when prefix search has no hits. Slow substring scans stay
     // isolated so that subsequent keystrokes can still return immediately.
