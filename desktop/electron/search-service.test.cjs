@@ -48,7 +48,7 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
   assert.ok(matches.some(({ name }) => name === "实验报告.docx"));
   // Test the actual fast unified path before usage ranking can mask a miss.
   const drives = [{ drive: "E", cached: false }];
-  for (const query of ["sy pdf", "pdf sy", "sy pd", "sybg pdf", "shiyan pdf"]) {
+  for (const query of ["sy pdf", "pdf sy", "sy pd", "pd sy", "sybg pdf", "shiyan pdf", "实验 pdf", "pdf 实验"]) {
     const hits = await search.searchUnified(query, drives);
     assert.ok(hits.some(({ file }) => file.name === "实验报告.pdf"), query);
     assert.ok(!hits.some(({ file }) => file.name === "实验报告.docx"), query);
@@ -76,6 +76,9 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
   assert.deepEqual(quick, [], "indexed hot path skips whole-volume substring scans");
   const deep = await search.searchNtfsDeep("report", [{ drive: "E", cached: false }]);
   assert.equal(deep[0].name, "sample-report.txt", "separate worker preserves substring fallback");
+  assert.ok((await search.searchUnifiedDeep("report", drives)).some(({ file }) => file.name === "sample-report.txt"));
+  assert.ok((await search.searchUnifiedDeep("bg pdf", drives)).some(({ file }) => file.name === "实验报告.pdf"));
+  assert.ok((await search.searchUnifiedDeep("报告 pdf", drives)).some(({ file }) => file.name === "实验报告.pdf"));
 });
 
 test("slow download-source results run in their own worker and are searchable by website", async (t) => {
