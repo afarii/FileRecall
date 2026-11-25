@@ -95,11 +95,23 @@ export default function App() {
     const version = ++reloadVersion.current;
     const favorite = currentFavorite.current;
     const api = window.fileRecall as typeof window.fileRecall & {
-      unifiedSearch: (query: string, favorites: boolean) => Promise<UnifiedRecord[]>;
+      unifiedSearch: (query: string, favorites: boolean, deep?: boolean) => Promise<UnifiedRecord[]>;
     };
     const files = await api.unifiedSearch(search, favorite);
     if (version !== reloadVersion.current || search !== currentQuery.current || favorite !== currentFavorite.current) return;
     setUnifiedResult({ query: search, favorites: favorite, files });
+    // A sparse prefix result is not proof of absence. Search substrings in a
+    // separate worker after a short pause, without replacing newer input.
+    if (search.trim().length < 2 || files.length >= 40) return;
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+    if (version !== reloadVersion.current || search !== currentQuery.current || favorite !== currentFavorite.current) return;
+    try {
+      const more = await api.unifiedSearch(search, favorite, true);
+      if (version !== reloadVersion.current || search !== currentQuery.current || favorite !== currentFavorite.current) return;
+      const merged = new Map(files.map((record) => [unifiedKey(record), record]));
+      for (const record of more) if (!merged.has(unifiedKey(record))) merged.set(unifiedKey(record), record);
+      setUnifiedResult({ query: search, favorites: favorite, files: [...merged.values()] });
+    } catch { /* Keep valid instant results when a background lookup times out. */ }
   }, []);
   const refreshFolders = useCallback(async () => {
     const [nextFolders, nextHistoryFolders] = await Promise.all([
@@ -134,8 +146,9 @@ export default function App() {
   useEffect(() => {
     let timer: number | undefined;
     const unsubscribe = window.fileRecall.onNtfsChanged(() => {
-      if (timer !== undefined) window.clearTimeout(timer);
+      if (timer !== undefined) return;
       timer = window.setTimeout(() => {
+        timer = undefined;
         if (mode === "literal") void reload(currentQuery.current).catch(() => {});
       }, 400);
     });
