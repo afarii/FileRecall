@@ -44,7 +44,8 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
   local.recordUse(report);
   assert.equal((await search.searchLocal("sy"))[0].useCount, 2);
   const matches = await search.searchNtfs("sy", [{ drive: "E", cached: false }]);
-  assert.equal(matches[0].name, "实验报告.pdf");
+  assert.ok(matches.some(({ name }) => name === "实验报告.pdf"));
+  assert.ok(matches.some(({ name }) => name === "实验报告.docx"));
   // Test the actual fast unified path before usage ranking can mask a miss.
   const drives = [{ drive: "E", cached: false }];
   for (const query of ["sy pdf", "pdf sy", "sy pd", "sybg pdf", "shiyan pdf"]) {
