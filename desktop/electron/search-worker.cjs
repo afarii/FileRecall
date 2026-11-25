@@ -54,12 +54,12 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
         downloads ??= new DownloadSources(workerData.downloadsDatabase, { readOnly: true });
         files = downloads.search(query).slice(0, 80);
       }
-    } else if (kind === "unified") {
+    } else if (kind === "unified" || kind === "unified-deep") {
       const list = Array.isArray(drives) ? drives : [];
       const source = localReader();
       const indexedDrives = new Set(list.map(({ drive }) => drive));
       const hasUncoveredRoots = source.roots().some(({ path }) => {
-        const volume = /^([a-z]):\\\\/i.exec(path)?.[1]?.toUpperCase();
+        const volume = /^([a-z]):[\\/]/i.exec(path)?.[1]?.toUpperCase();
         return !volume || !indexedDrives.has(volume);
       });
       // The legacy filename engine is now a compatibility fallback only.
@@ -72,7 +72,7 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
       const matches = catalog ? list.flatMap(({ drive, cached }) => {
         const rows = !query.trim()
           ? favoritesOnly ? catalog.favorites(drive) : catalog.recent(drive)
-          : catalog.search(drive, query, { fastOnly: true });
+          : catalog.search(drive, query, { fastOnly: kind === "unified" });
         return rows.map((row) => ({
           id: row.id, drive, name: row.name, path: fullPath(row),
           directory: Boolean(row.isDirectory), cached,
