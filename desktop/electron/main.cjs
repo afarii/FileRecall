@@ -197,8 +197,9 @@ app.whenReady().then(() => {
   ipcMain.handle("ntfs:retry-auto", async () => { await ntfs?.retryAutomatically(); return ntfsStatus(); });
   ipcMain.handle("ntfs:enable", (_event, drive) => ntfs?.enable(drive) ?? ntfsStatus());
   ipcMain.handle("ntfs:disable", (_event, drive) => ntfs?.disable(drive) ?? ntfsStatus());
-  ipcMain.handle("files:search-unified", (_event, query, favoritesOnly) => searches.searchUnified(
-    query, ntfs?.searchableDrives() ?? [], Boolean(favoritesOnly)));
+  ipcMain.handle("files:search-unified", (_event, query, favoritesOnly, deep) =>
+    (deep === true ? searches.searchUnifiedDeep : searches.searchUnified)(
+      query, ntfs?.searchableDrives() ?? [], Boolean(favoritesOnly)));
   ipcMain.handle("ntfs:favorite", async (_event, drive, id, enabled) => {
     if (!ntfs || typeof enabled !== "boolean") return false;
     const ok = await ntfs.favorite(drive, id, enabled);
