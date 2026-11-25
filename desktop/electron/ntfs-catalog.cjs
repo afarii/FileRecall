@@ -367,9 +367,10 @@ class NtfsCatalog {
     if (!terms.length) return [];
     // File extensions usually occur at the end, so anchor indexed candidates
     // on a filename/phonetic token before filtering by extension.
-    const extension = /^(?:pdf|docx?|xlsx?|pptx?|txt|md|zip|rar|7z|png|jpe?g|gif|mp[34]|html?|json|csv|exe|dll|sys)$/i;
+    const extensions = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "zip", "rar", "7z", "png", "jpg", "jpeg", "gif", "mp3", "mp4", "html", "json", "csv", "exe", "dll", "sys"];
+    const isExtension = (term) => term.length >= 2 && extensions.some((ext) => ext.startsWith(term.replace(/^\./, "")));
     const rawPrimary = [...terms].sort((a, b) =>
-      Number(extension.test(a)) - Number(extension.test(b)) || b.length - a.length)[0];
+      Number(isExtension(a)) - Number(isExtension(b)) || b.length - a.length || a.localeCompare(b))[0];
     // Split explicit path queries so we can still use the indexed filename
     // prefix instead of scanning every path on disk.
     const pathParts = rawPrimary.replaceAll("/", "\\");
@@ -458,9 +459,7 @@ class NtfsCatalog {
     // The UI's fast path never performs an entire-volume substring scan.
     // Keep the complete scan available for explicit deep search and the
     // compatibility API, without putting it on the keystroke hot path.
-    if (fastOnly || results.length >= 100 ||
-        (primary.length <= 2 && /^[a-z0-9]+$/u.test(primary)) ||
-        results.length >= 40) return rank(results);
+    if (fastOnly || results.length >= 40) return rank(results);
     const all = filters(terms);
     const infix = this.db.prepare(columns + " " + from +
       " WHERE i.drive = ? AND " + all.where + " LIMIT 200").all(drive, ...all.args);
