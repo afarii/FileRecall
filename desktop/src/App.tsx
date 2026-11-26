@@ -337,8 +337,18 @@ export default function App() {
       (historical ? history : current).push(record);
     }
     if (!semanticMode) {
-      current.sort((a, b) => relevance(b, searchQuery) - relevance(a, searchQuery));
-      history.sort((a, b) => relevance(b, searchQuery) - relevance(a, searchQuery));
+      const compare = (a: UnifiedRecord, b: UnifiedRecord) => {
+        const left = a.file as LocalRanking;
+        const right = b.file as LocalRanking;
+        return relevance(b, searchQuery) - relevance(a, searchQuery) ||
+          Number(Boolean(right.favorite)) - Number(Boolean(left.favorite)) ||
+          (right.useCount ?? 0) - (left.useCount ?? 0) ||
+          (right.lastUsedAt ?? 0) - (left.lastUsedAt ?? 0) ||
+          left.name.localeCompare(right.name) || left.path.localeCompare(right.path) ||
+          unifiedKey(a).localeCompare(unifiedKey(b));
+      };
+      current.sort(compare);
+      history.sort(compare);
     }
     return { currentRecords: current, historyRecords: history };
   }, [semanticMode, semanticResult, matched, downloadRecords, searchQuery]);
