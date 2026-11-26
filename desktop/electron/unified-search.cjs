@@ -1,4 +1,5 @@
 "use strict";
+const { prepareQuery, scoreFile, compareFiles } = require("./search-relevance.cjs");
 
 const keyOf = (file) => String(file.currentPath || file.path).replaceAll("/", "\\").toLowerCase();
 const driveOf = (path) => /^([a-z]):\\/i.exec(path)?.[1]?.toUpperCase() ?? null;
@@ -37,14 +38,16 @@ function mergeFileSearch({ query, favoritesOnly = false, localFiles = [], ntfsFi
       byPath.set(key, { type: "ntfs", file });
     }
   }
+  const prepared = prepareQuery(query);
   const results = [...byPath.values()];
-  results.sort((a, b) => {
-    const score = (row) => row.file.matchScore ?? 0;
-    return score(b) - score(a) ||
-      Number(Boolean(b.file.favorite)) - Number(Boolean(a.file.favorite)) ||
-      (b.file.useCount || 0) - (a.file.useCount || 0) ||
-      a.file.name.localeCompare(b.file.name);
-  });
+  if (prepared.terms.length) {
+    for (const record of results) {
+      if (record.type === "local" && !Number.isFinite(record.file.matchScore)) {
+        record.file = { ...record.file, matchScore: scoreFile(record.file, prepared) };
+      }
+    }
+  }
+  results.sort((a, b) => compareFiles(a.file, b.file));
   return results.slice(0, 300);
 }
 module.exports = { mergeFileSearch };
