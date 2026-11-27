@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { FileTile } from "./FileDetails";
 import MotwInfo from "./MotwInfo";
+import NtfsSourceInfo from "./NtfsSourceInfo";
 
 export default function NtfsDetails({ file, onClose, onFavoriteChanged }: {
   file: NtfsResult; onClose: () => void; onFavoriteChanged: () => void;
@@ -54,6 +55,7 @@ export default function NtfsDetails({ file, onClose, onFavoriteChanged }: {
     </section>
     {!file.directory && !file.cached && <section className="detail-section">
       <h3>文件来源线索</h3>
+      <NtfsSourceInfo key={file.drive + ":" + file.id + ":" + file.path} drive={file.drive} fileId={file.id} />
       <MotwInfo drive={file.drive} fileId={file.id} />
     </section>}
   </aside>;
