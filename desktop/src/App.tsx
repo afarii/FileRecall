@@ -9,7 +9,7 @@ import PerformanceDiagnostics from "./PerformanceDiagnostics";
 import useSemanticSearch from "./useSemanticSearch";
 import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } from "./FileDetails";
 import logo from "../../filerecall.svg";
-import { searchDisplay, type SearchPhase } from "./search-state";
+import { searchDisplay, preservePreviousResults, canActivateSearchResult, type SearchPhase } from "./search-state";
 
 type UnifiedRecord = SearchRecord | { type: "ntfs"; file: NtfsResult };
 type LocalRanking = FileRecord & { useCount?: number; lastUsedAt?: number; matchRank?: number };
@@ -73,6 +73,8 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedResults, setExpandedResults] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [previousResults, setPreviousResults] = useState<{ favorites: boolean; current: UnifiedRecord[]; history: UnifiedRecord[]; historyVisible: boolean }>();
+  const [slowSearch, setSlowSearch] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => setSearchQuery(query), query.trim() ? 25 : 0);
     return () => window.clearTimeout(timer);
@@ -377,6 +379,31 @@ export default function App() {
   const searchingHistory = !semanticMode && !localOnly && Boolean(searchQuery.trim()) && (!browser || Boolean(browser.pending));
   const display = searchDisplay({ inputPending, filePhase: matched?.phase, historyPending: searchingHistory,
     historyFailed: !localOnly && Boolean(browser?.error), hasResults });
+  const showingPrevious = !semanticMode && preservePreviousResults({
+    display, query, favorites: localOnly, previousFavorites: previousResults?.favorites,
+    previousCount: (previousResults?.current.length ?? 0) + (previousResults?.history.length ?? 0),
+  });
+  const visibleCurrent = showingPrevious ? previousResults!.current : currentRecords;
+  const visibleHistory = showingPrevious ? previousResults!.history : historyRecords;
+  const visibleHistoryExpanded = showingPrevious ? previousResults!.historyVisible : historyVisible;
+  const canActivate = semanticMode || canActivateSearchResult({ inputPending, showingPrevious, hasResults });
+  useEffect(() => {
+    if (semanticMode || inputPending) return;
+    if (hasResults) {
+      setPreviousResults({ favorites: localOnly, current: currentRecords, history: historyRecords, historyVisible });
+    } else if (display === "empty" || display === "failed") {
+      setPreviousResults(undefined);
+    }
+  }, [semanticMode, inputPending, hasResults, localOnly, currentRecords, historyRecords, historyVisible, display]);
+
+  const showSearchDelay = !semanticMode && Boolean(query.trim()) && display === "searching" && !showingPrevious;
+  useEffect(() => {
+    setSlowSearch(false);
+    if (!showSearchDelay) return;
+    const timer = window.setTimeout(() => setSlowSearch(true), 500);
+    return () => window.clearTimeout(timer);
+  }, [showSearchDelay, query, localOnly]);
+
   const pastFolders = historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path));
 
   function renderRecords(records: UnifiedRecord[], title: string) {
@@ -397,7 +424,7 @@ export default function App() {
         const needle = searchQuery.trim().toLowerCase();
         const sourceMatched = record.type === "download" && needle.length > 0
           && [record.file.domain, record.file.sourceTitle].some((value) => value.toLowerCase().includes(needle));
-        return <button type="button" className="result-row" key={key} aria-expanded={selected === key}
+        return <button type="button" className="result-row" key={key} disabled={!canActivate} aria-expanded={canActivate && selected === key}
           aria-controls={selected === key ? "file-details" : undefined}
           onKeyDown={(event) => {
             if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
@@ -407,6 +434,7 @@ export default function App() {
             (next ?? searchInput.current)?.focus();
           }}
           onClick={(event) => {
+            if (!canActivate) return;
             selectedButton.current = event.currentTarget;
             setSelected(selected === key ? null : key);
             setError("");
@@ -425,7 +453,7 @@ export default function App() {
         </button>;
       })}
       {records.length > 60 && !expandedResults &&
-        <button type="button" className="secondary show-more" onClick={() => setExpandedResults(true)}>
+        <button type="button" className="secondary show-more" disabled={!canActivate} onClick={() => setExpandedResults(true)}>
           显示更多（共 {records.length} 条）
         </button>}
     </section>;
@@ -460,7 +488,7 @@ export default function App() {
           <form className="search-form" onSubmit={(event) => {
             event.preventDefault();
             if (semanticMode && semantic.model?.ready && textEnabled) void semantic.search(query);
-            if (!semanticMode) resultPane.current?.querySelector<HTMLButtonElement>(".result-row")?.click();
+            if (!semanticMode && canActivate) resultPane.current?.querySelector<HTMLButtonElement>(".result-row:not(:disabled)")?.click();
           }}>
           <label className="search-box">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
@@ -470,10 +498,11 @@ export default function App() {
               placeholder={semanticMode ? "用一句话描述你记得的内容" : "搜索文件名、网站或下载线索"}
               value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); setExpandedResults(false); setError(""); }}
               onKeyDown={(event) => {
-                if (event.key !== "ArrowDown") return;
-                const first = resultPane.current?.querySelector<HTMLButtonElement>(".result-row");
+                if (event.key !== "ArrowDown" || !canActivate) return;
+                const first = resultPane.current?.querySelector<HTMLButtonElement>(".result-row:not(:disabled)");
                 if (first) { event.preventDefault(); first.focus(); }
               }} />
+            {showSearchDelay && slowSearch && <span className="search-delay-spinner" role="status" aria-label="检索中" />}
           </label>
           {semanticMode && <button disabled={semantic.searching || !semantic.model?.ready || !textEnabled || !query.trim()}>搜索</button>}
           <button type="button" className="secondary" aria-pressed={localOnly} title="仅显示收藏" onClick={() => { setMode("literal"); setFilter(localOnly ? "all" : "favorites"); setSelected(null); }}>{localOnly ? "★ 收藏" : "☆ 收藏"}</button>
@@ -498,19 +527,17 @@ export default function App() {
           {error && <p className="error" role="alert">{error}</p>}
           {!semanticMode && browser?.error && !localOnly && <p className="error" role="alert">{browser.error}</p>}
           {!semanticMode && matched?.error && <p className="error" role="alert">{matched.error}</p>}
-          {!semanticMode && display === "searching" && <p className="empty" role="status">正在搜索…</p>}
-          {!semanticMode && display === "partial" && <p className="muted" role="status">正在补充搜索…</p>}
           {!semanticMode && display === "empty" && <p className="empty">{searchQuery.trim() || filter !== "all"
             ? "没有找到匹配的记录。" : "输入文件名、拼音或来源即可开始搜索。常用文件会显示在这里。"}</p>}
-          {renderRecords(currentRecords, semanticMode ? "相近内容" : "搜索结果")}
-          {!semanticMode && historyRecords.length > 0 && <>
-            {currentRecords.length > 0 && <button type="button"
-              className="secondary history-toggle" aria-expanded={historyVisible}
+          {renderRecords(visibleCurrent, semanticMode ? "相近内容" : "搜索结果")}
+          {!semanticMode && visibleHistory.length > 0 && <>
+            {visibleCurrent.length > 0 && <button type="button"
+              className="secondary history-toggle" disabled={!canActivate} aria-expanded={visibleHistoryExpanded}
               onClick={() => { setShowHistory((previous) => !previous); setExpandedResults(false); setSelected(null); }}>
-              {historyVisible ? "收起历史记录" : "查看 " + historyRecords.length + " 条相关下载与历史记录"}
-              <span aria-hidden="true">{historyVisible ? "⌃" : "⌄"}</span>
+              {visibleHistoryExpanded ? "收起历史记录" : "查看 " + visibleHistory.length + " 条相关下载与历史记录"}
+              <span aria-hidden="true">{visibleHistoryExpanded ? "⌃" : "⌄"}</span>
             </button>}
-            {historyVisible && renderRecords(historyRecords, "历史与找回")}
+            {visibleHistoryExpanded && renderRecords(visibleHistory, "历史与找回")}
           </>}
           <NtfsQuickResults enabled={!semanticMode} />
         </section>
