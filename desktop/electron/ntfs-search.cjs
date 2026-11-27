@@ -355,6 +355,21 @@ class NtfsSearch {
     return fullPath(this.catalog.item(drive, id)) ?? null;
   }
 
+  sourceTarget(value, id) {
+    const drive = driveLetter(value);
+    if (this.sessions.get(drive)?.phase !== "ready") return null;
+    const volume = this.catalog.activeDrives().find((entry) => entry.drive === drive)?.volume;
+    const path = this.target(drive, id);
+    return volume && path ? { drive, volume: volume.toLowerCase(), id, path } : null;
+  }
+
+  sourceTargetForVolume(volume, id) {
+    if (typeof volume !== "string") return null;
+    const state = this.catalog.activeDrives().find((entry) =>
+      entry.volume.toLowerCase() === volume.toLowerCase() && this.sessions.get(entry.drive)?.phase === "ready");
+    return state ? this.sourceTarget(state.drive, id) : null;
+  }
+
   async close() {
     if (this.closed) return;
     this.closed = true;
