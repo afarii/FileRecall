@@ -19,3 +19,26 @@ export function searchDisplay({
   if (filePhase === "failed" || historyFailed) return "failed";
   return "empty";
 }
+
+export function preservePreviousResults({
+  display, query, favorites, previousFavorites, previousCount,
+}: {
+  display: SearchDisplay;
+  query: string;
+  favorites: boolean;
+  previousFavorites: boolean | undefined;
+  previousCount: number;
+}): boolean {
+  return display === "searching" && Boolean(query.trim()) &&
+    favorites === previousFavorites && previousCount > 0;
+}
+
+export function canActivateSearchResult({
+  inputPending, showingPrevious, hasResults,
+}: {
+  inputPending: boolean;
+  showingPrevious: boolean;
+  hasResults: boolean;
+}): boolean {
+  return !inputPending && !showingPrevious && hasResults;
+}
