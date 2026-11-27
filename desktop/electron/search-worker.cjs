@@ -8,6 +8,7 @@ const { performance } = require("node:perf_hooks");
 const { FileIndex } = require("./indexer.cjs");
 const { NtfsCatalog, fullPath } = require("./ntfs-catalog.cjs");
 const { DownloadSources } = require("./download-sources.cjs");
+const { MotwMemory } = require("./motw-memory.cjs");
 const { existsSync } = require("node:fs");
 const { mergeFileSearch } = require("./unified-search.cjs");
 const { compareFiles } = require("./search-relevance.cjs");
@@ -15,6 +16,7 @@ const { compareFiles } = require("./search-relevance.cjs");
 let local;
 let ntfs;
 let downloads;
+let motw;
 function localReader() {
   if (!local) {
     const reader = Object.create(FileIndex.prototype);
@@ -42,9 +44,11 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
       local?.db.close();
       ntfs?.db.close();
       downloads?.close();
+      motw?.close();
       local = undefined;
       ntfs = undefined;
       downloads = undefined;
+      motw = undefined;
       files = [];
     } else if (kind === "local") {
       files = localReader().search(query);
@@ -54,6 +58,10 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
       } else {
         downloads ??= new DownloadSources(workerData.downloadsDatabase, { readOnly: true });
         files = downloads.search(query).slice(0, 80);
+      }
+      if (workerData.motwDatabase && existsSync(workerData.motwDatabase)) {
+        motw ??= new MotwMemory(workerData.motwDatabase, { readOnly: true });
+        files = [...motw.search(query), ...files];
       }
     } else if (kind === "unified" || kind === "unified-deep") {
       const list = Array.isArray(drives) ? drives : [];
