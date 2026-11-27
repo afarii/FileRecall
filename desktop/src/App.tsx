@@ -344,7 +344,12 @@ export default function App() {
       : (matched?.files ?? []);
     // Download events are separate historical evidence. A reused pathname
     // does not prove the current file is the one originally downloaded.
-    const downloads = downloadRecords;
+    // MOTW observations can identify a current file; keep it in current results.
+    // A duplicate current filename row already exposes its MOTW details.
+    const filenames = new Set(filenameRecords.filter((record) => record.type === "ntfs" || (record.type === "local" && record.file.status === "present"))
+      .map((record) => record.file.path.toLowerCase()));
+    const downloads = downloadRecords.filter((record) => record.type !== "download" || record.file.manager !== "motw" ||
+      record.file.pathStatus !== "present" || !filenames.has(record.file.path.toLowerCase()));
     const current: UnifiedRecord[] = [];
     const history: UnifiedRecord[] = [];
     for (const record of [...filenameRecords, ...downloads]) {
@@ -352,7 +357,7 @@ export default function App() {
       // identity comes from the file index. Keep provenance-only rows together.
       const historical = record.type === "local"
         ? record.file.status === "missing" && !record.file.currentPath
-        : record.type === "download";
+        : record.type === "download" && (record.file.manager !== "motw" || record.file.pathStatus !== "present");
       (historical ? history : current).push(record);
     }
     if (!semanticMode) {
@@ -417,10 +422,10 @@ export default function App() {
           ? { tone: "", label: record.file.cached ? "缓存" : record.file.directory ? "文件夹" : "" }
           : record.type === "download" && record.file.pathStatus !== "present"
             ? { tone: record.file.pathStatus === "missing" ? "warn" : "",
-              label: record.file.pathStatus === "missing" ? "历史下载" : "状态未确认" }
+              label: record.file.pathStatus === "missing" ? (record.file.manager === "motw" ? "历史文件" : "历史下载") : "状态未确认" }
             : recordStatus(record);
         const subtitle = record.type === "local" ? (record.file.currentPath || file.path)
-          : record.type === "ntfs" ? record.file.path : (record.file.domain || file.path);
+          : record.type === "ntfs" ? record.file.path : record.file.manager === "motw" && record.file.pathStatus === "present" ? file.path : (record.file.domain || file.path);
         const needle = searchQuery.trim().toLowerCase();
         const sourceMatched = record.type === "download" && needle.length > 0
           && [record.file.domain, record.file.sourceTitle].some((value) => value.toLowerCase().includes(needle));
