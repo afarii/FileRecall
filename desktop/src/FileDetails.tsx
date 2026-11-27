@@ -22,8 +22,8 @@ export function recordStatus(record: SearchRecord) {
   }
   const { file } = record;
   return {
-    label: sourceLabels[file.sourceStatus],
-    tone: file.canOpenSource ? "good" : file.sourceStatus === "candidate" ? "warn" : "",
+    label: file.manager === "motw" ? "Windows 来源线索" : sourceLabels[file.sourceStatus],
+    tone: file.manager === "motw" ? "warn" : file.canOpenSource ? "good" : file.sourceStatus === "candidate" ? "warn" : "",
   };
 }
 
@@ -177,10 +177,10 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
         <FileNotes key={provenance.identity} path={file.path} identity={provenance.identity} initial={provenance.annotation} />}
     </> : <>
       <section className="detail-section">
-        <h3>下载记录</h3><dl>
-          <dt>原路径</dt><dd>{file.path}</dd>
-          <dt>原路径状态</dt><dd>{{ present: "原路径有文件", missing: "原路径已丢失", unknown: "原路径状态未知" }[record.file.pathStatus]}</dd>
-          <dt>{record.file.manager === "aria2" ? "首次导入" : "下载时间"}</dt><dd>{new Date(record.file.startedAt).toLocaleString()}</dd>
+        <h3>{record.file.manager === "motw" ? "来源记忆" : "下载记录"}</h3><dl>
+          <dt>{record.file.manager === "motw" ? "记录路径" : "原路径"}</dt><dd>{file.path}</dd>
+          <dt>{record.file.manager === "motw" ? "文件状态" : "原路径状态"}</dt><dd>{{ present: "原路径有文件", missing: "原路径已丢失", unknown: "原路径状态未知" }[record.file.pathStatus]}</dd>
+          <dt>{record.file.manager === "motw" ? "首次观察" : record.file.manager === "aria2" ? "首次导入" : "下载时间"}</dt><dd>{new Date(record.file.startedAt).toLocaleString()}</dd>
           {linked && <><dt>{linked.status === "present" ? "当前位置" : "关联的历史路径"}</dt><dd>{linked.path}</dd></>}
         </dl>
         <div className="actions">
@@ -199,7 +199,7 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
         {record.file.canOpenSource && <button onClick={() => openSource(record.file.id)}>
           {record.file.pathStatus === "missing" ? "查看来源，尝试找回"
             : record.file.manager === "aria2" ? "打开下载地址" : "打开来源页面"} ↗</button>}
-        {record.file.sourceStatus === "candidate" && <p className="muted">可在 Chrome 扩展中核对来源。</p>}
+        {record.file.manager === "motw" ? <p className="muted">来源来自 Windows 文件标记，可能被修改。打开前请核对网址。</p> : record.file.sourceStatus === "candidate" && <p className="muted">可在 Chrome 扩展中核对来源。</p>}
       </section>
     </>}
     {sourceError && <p className="error" role="alert">{sourceError}</p>}
