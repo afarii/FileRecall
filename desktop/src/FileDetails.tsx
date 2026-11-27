@@ -184,7 +184,11 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
           {linked && <><dt>{linked.status === "present" ? "当前位置" : "关联的历史路径"}</dt><dd>{linked.path}</dd></>}
         </dl>
         <div className="actions">
-          {linked?.status === "present" && <button onClick={() => reveal(linked.path)}>定位现址</button>}
+          {linked?.status === "present" && <button onClick={() => {
+            const api = window.fileRecall as typeof window.fileRecall & { revealLinkedDownload: (id: string) => Promise<boolean> };
+            void api.revealLinkedDownload(record.file.id).then((ok) => { if (!ok) setActionMessage("文件位置已改变，请重新打开详情。"); })
+              .catch(() => setActionMessage("无法定位关联文件。"));
+          }}>定位现址</button>}
           <button className="secondary" onClick={() => void fileAction("copy")}>复制原路径</button>
         </div>
       </section>
