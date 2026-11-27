@@ -18,7 +18,7 @@ function validateVolume(info) {
 }
 
 class NtfsSearch {
-  constructor(database, userData, executable, { onChange, onPaths, onActiveDrives,
+  constructor(database, userData, executable, { onChange, onPaths, onActiveDrives, onSourceRows = () => {},
     createReader = startNtfsReader, discoverDrives = discoverFixedNtfsDrives, trackedDrives }) {
     this.catalog = new NtfsCatalog(database, userData);
     this.executable = executable;
@@ -28,6 +28,7 @@ class NtfsSearch {
     this.autoMessage = "";
     this.onChange = onChange;
     this.onPaths = onPaths;
+    this.onSourceRows = onSourceRows;
     this.onActiveDrives = onActiveDrives;
     this.trackedDrives = Array.isArray(trackedDrives) ? new Set(trackedDrives) : null;
     this.sessions = new Map();
@@ -307,6 +308,7 @@ class NtfsSearch {
         const slice = batch.rows.slice(offset, offset + 192);
         const isLast = offset + slice.length === batch.rows.length;
         catalogChanged = this.catalog.apply(drive, slice, false, info.journal, isLast ? batch.next : undefined) || catalogChanged;
+        try { this.onSourceRows(info.volume, slice); } catch { /* Source capture must not interrupt filename indexing. */ }
         await new Promise((resolve) => setTimeout(resolve, 4));
       }
       if (!batch.rows.length) this.catalog.checkpoint(drive, info.journal, batch.next);
