@@ -16,7 +16,7 @@ export default function MotwInfo({ localPath, drive, fileId }: {
     return () => { active = false; };
   }, [localPath, drive, fileId]);
   return <section className="detail-section">
-    <h3>Windows 文件来源标记 (MOTW)</h3>
+    <h3>Windows 来源线索</h3>
     {loading ? <p className="muted">正在读取本地来源标记…</p>
       : value ? <>
         <span className="badge warn">{value.historical ? "历史来源线索 · 待核对" : "来源线索 · 待核对"}</span>
