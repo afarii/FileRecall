@@ -14,13 +14,14 @@ const { createHotkey } = require("./hotkey.cjs");
 const { semanticModel } = require("./semantic-model.cjs");
 const { createSemanticSearch } = require("./semantic-search.cjs");
 const { createProvenance } = require("./provenance.cjs");
-const { NtfsSourceLinks, createNtfsProvenance } = require("./ntfs-provenance.cjs");
+const { NtfsSourceLinks, createNtfsProvenance, verifiedTarget } = require("./ntfs-provenance.cjs");
+const { MotwMemory } = require("./motw-memory.cjs");
 const { createAria2Connection } = require("./aria2-connection.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { createNtfsService } = require("./ntfs-service.cjs");
 const { createSearchService } = require("./search-service.cjs");
 const { createPerformanceDiagnostics } = require("./performance-diagnostics.cjs");
-const { readMotw } = require("./motw.cjs");
+const { safeHttpUrl } = require("./motw.cjs");
 const appIconDataURL = require("./app-icon.cjs");
 const appIcon = () => nativeImage?.createFromDataURL(appIconDataURL);
 
@@ -178,6 +179,7 @@ app.whenReady().then(() => {
           onPaths: (drive, paths) => monitor.applyJournal(drive, paths),
           onActiveDrives: (drives) => monitor.setJournalDrives(drives),
           onMetrics: (metrics) => diagnostics.setNtfsMetrics(metrics),
+          onSourcesChanged: () => send("downloads:changed"),
         });
         lastTrackedDrives = trackedDrives().join("");
       } catch (error) {
@@ -189,6 +191,7 @@ app.whenReady().then(() => {
     localDatabase: databasePath,
     ntfsDatabase: ntfs ? join(userData, "ntfs-index.sqlite") : null,
     downloadsDatabase: join(userData, "browser-downloads.sqlite"),
+    motwDatabase: join(userData, "motw-memory.sqlite"),
     applicationData: userData,
     onMetric: (kind, durationMs) => diagnostics.recordSearch(kind, durationMs),
   });
@@ -212,8 +215,7 @@ app.whenReady().then(() => {
   ipcMain.handle("ntfs:search-deep", (_event, query) => ntfs
     ? searches.searchNtfsDeep(query, ntfs.searchableDrives()) : []);
   ipcMain.handle("ntfs:motw", async (_event, drive, id) => {
-    const path = await ntfs?.target(drive, id);
-    return path ? readMotw(path) : null;
+    return await ntfs?.captureMotw(drive, id) ?? null;
   });
   ipcMain.handle("ntfs:reveal", async (_event, drive, id) => {
     const path = await ntfs?.target(drive, id);
@@ -322,8 +324,24 @@ app.whenReady().then(() => {
       send("downloads:changed");
       return result;
     })));
+  const motwPath = join(userData, "motw-memory.sqlite");
+  function motwRecord(id) {
+    if (typeof id !== "string" || !/^motw:[a-f0-9]{64}$/.test(id) || !existsSync(motwPath)) return null;
+    const memory = new MotwMemory(motwPath, { readOnly: true });
+    try { return memory.byId(id) ?? null; } finally { memory.close(); }
+  }
+  async function resolveMotw(row) {
+    if (!row) return null;
+    if (row.deleted) return { path: row.path, name: row.name, status: "missing" };
+    const current = await verifiedTarget(await ntfs?.sourceTargetForVolume(row.volume, row.frn));
+    if (current?.identity === row.identity)
+      return { path: current.path, name: require("node:path").win32.basename(current.path), status: "present" };
+    // Offline, journal catch-up or inaccessible files are unverified, not deleted.
+    return null;
+  }
   async function linkedDownload(id) {
     if (typeof id !== "string" || id.length > 160) return null;
+    if (id.startsWith("motw:")) return resolveMotw(motwRecord(id));
     const linked = await withNtfsProvenance((service) => service.linkedFile(id));
     return linked ?? index.linkedFile(id);
   }
@@ -352,12 +370,19 @@ app.whenReady().then(() => {
     const rows = await searches.searchDownloads(query);
     const scoped = manager === "chrome" || manager === "aria2"
       ? rows.filter((row) => row.manager === manager) : rows;
-    return Promise.all(scoped.map(async (row) => ({
-      ...row, pathStatus: await downloadPathStatus(row.path),
-    })));
+    return Promise.all(scoped.map(async (row) => {
+      if (row.manager === "motw") {
+        const linked = await resolveMotw(motwRecord(row.id));
+        return { ...row, path: linked?.path ?? row.path, name: linked?.name ?? row.name,
+          pathStatus: linked?.status ?? "unknown" };
+      }
+      return { ...row, pathStatus: await downloadPathStatus(row.path) };
+    }));
   });
   ipcMain.handle("downloads:open-source", async (_event, id) => {
-    const url = readDownloads((sources) => sources.sourceToOpen(id), null);
+    const memory = typeof id === "string" && id.startsWith("motw:") ? motwRecord(id) : null;
+    const url = memory ? safeHttpUrl(memory.referrer) || safeHttpUrl(memory.host)
+      : readDownloads((sources) => sources.sourceToOpen(id), null);
     if (!url) return false;
     await shell.openExternal(url);
     return true;
@@ -443,7 +468,7 @@ app.whenReady().then(() => {
   ipcMain.handle("files:copy-path", async (_event, kind, key) => {
     if (typeof key !== "string") return false;
     const path = kind === "local" ? (await fileTarget(key) ?? index.get(key)?.path)
-      : kind === "download" && key.length <= 160 ? readDownloads((sources) => sources.byId(key)?.path, null) : null;
+      : kind === "download" && key.length <= 160 ? (key.startsWith("motw:") ? motwRecord(key)?.path : readDownloads((sources) => sources.byId(key)?.path, null)) : null;
     if (!path) return false;
     clipboard.writeText(path);
     return true;
