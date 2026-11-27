@@ -15,6 +15,7 @@ async function startMain(index, ownsLock = true, withTray = false) {
   app.whenReady = () => Promise.resolve();
   app.getPath = () => __dirname;
   app.setPath = () => {};
+  app.exit = () => { closed = true; };
   app.quit = () => {
     let prevented = false;
     app.emit("before-quit", { preventDefault() { prevented = true; } });
@@ -37,7 +38,8 @@ async function startMain(index, ownsLock = true, withTray = false) {
         this.webContents.send = (channel) => messages.push(channel);
         this.webContents.isLoadingMainFrame = () => false;
       }
-      isDestroyed() { return false; }
+      isDestroyed() { return Boolean(this.destroyed); }
+      destroy() { this.destroyed = true; this.visible = false; this.emit("closed"); }
       isMinimized() { return false; }
       hide() { this.visible = false; }
       show() { this.visible = true; }
@@ -109,6 +111,9 @@ test("main serializes rescans and waits before closing SQLite", { timeout: 5000 
   main.app.quit();
   assert.equal(main.isClosed(), false);
   assert.equal(databaseClosed, false);
+  assert.equal(main.windows[0].isDestroyed(), true);
+  main.app.quit(); // duplicate quit must not interrupt the pending transaction
+  assert.equal(databaseClosed, false);
   await assert.rejects(main.handlers.get("folders:rescan")(), /关闭/);
   finish({ folder: __dirname, complete: true });
   await scan;
@@ -173,6 +178,8 @@ test("Windows close hides to tray, hotkey and second launch restore, and tray qu
   assert.equal(window.visible, true);
   assert.equal(main.windows.length, 1);
   main.tray.menu.find(({ label }) => label === "退出 FileRecall").click();
+  assert.equal(window.isDestroyed(), true);
+  assert.equal(main.tray.destroyed, true);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(main.isClosed(), true);
   assert.equal(databaseClosed, true);
