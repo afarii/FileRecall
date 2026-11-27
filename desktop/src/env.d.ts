@@ -28,7 +28,7 @@ interface BrowserDownload {
   name: string;
   startedAt: number;
   sourceStatus: "matched" | "confirmed" | "manual" | "candidate" | "unknown" | "rejected" | "direct";
-  manager: "chrome" | "aria2";
+  manager: "chrome" | "aria2" | "motw";
   sourceTitle: string;
   domain: string;
   canOpenSource: boolean;
