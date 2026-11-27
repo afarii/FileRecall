@@ -21,3 +21,18 @@ test("empty results are displayed only after every requested search stage settle
   assert.equal(display({ hasResults: true }), "results");
   assert.equal(display({ hasResults: true, filePhase: "failed" }), "results");
 });
+
+test("quiet search preserves previous rows only while waiting and prevents stale activation", async () => {
+  const { preservePreviousResults, canActivateSearchResult } = await import("../src/search-state.ts");
+  const base = { display: "searching", query: "sy pdf", favorites: false, previousFavorites: false, previousCount: 5 };
+  assert.equal(preservePreviousResults(base), true);
+  for (const overrides of [{ display: "empty" }, { display: "failed" }, { display: "partial" },
+    { display: "results" }, { query: "" }, { favorites: true }, { previousCount: 0 }]) {
+    assert.equal(preservePreviousResults({ ...base, ...overrides }), false);
+  }
+  assert.equal(canActivateSearchResult({ inputPending: true, showingPrevious: true, hasResults: false }), false);
+  assert.equal(canActivateSearchResult({ inputPending: false, showingPrevious: true, hasResults: false }), false);
+  assert.equal(canActivateSearchResult({ inputPending: true, showingPrevious: false, hasResults: true }), false);
+  assert.equal(canActivateSearchResult({ inputPending: false, showingPrevious: false, hasResults: true }), true);
+  assert.equal(canActivateSearchResult({ inputPending: false, showingPrevious: false, hasResults: false }), false);
+});
