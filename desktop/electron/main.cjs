@@ -333,7 +333,7 @@ app.whenReady().then(() => {
   async function resolveMotw(row) {
     if (!row) return null;
     if (row.deleted) return { path: row.path, name: row.name, status: "missing" };
-    const current = await verifiedTarget(await ntfs?.sourceTargetForVolume(row.volume, row.frn));
+    const current = await Promise.resolve().then(async () => verifiedTarget(await ntfs?.sourceTargetForVolume(row.volume, row.frn))).catch(() => null);
     if (current?.identity === row.identity)
       return { path: current.path, name: require("node:path").win32.basename(current.path), status: "present" };
     // Offline, journal catch-up or inaccessible files are unverified, not deleted.
