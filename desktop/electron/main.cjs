@@ -21,6 +21,7 @@ const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { createNtfsService } = require("./ntfs-service.cjs");
 const { createSearchService } = require("./search-service.cjs");
 const { createPerformanceDiagnostics } = require("./performance-diagnostics.cjs");
+const { createShutdown } = require("./shutdown.cjs");
 const { safeHttpUrl } = require("./motw.cjs");
 const appIconDataURL = require("./app-icon.cjs");
 const appIcon = () => nativeImage?.createFromDataURL(appIconDataURL);
@@ -35,7 +36,7 @@ let updates;
 let ntfs;
 let searches;
 let diagnostics;
-let ntfsClosing;
+let shutdown;
 let lastTrackedDrives = "";
 let searchKeyTimer;
 let updateNotification;
@@ -56,6 +57,7 @@ function trackedDrives() {
 }
 
 function notifyChanged() {
+  if (closing) return;
   if (ntfs && index) {
     const drives = trackedDrives();
     const key = drives.join("");
@@ -68,6 +70,7 @@ function notifyChanged() {
 }
 
 function send(channel, payload) {
+  if (closing) return;
   if (window && !window.isDestroyed()) window.webContents.send(channel, payload);
 }
 
@@ -508,30 +511,41 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  if (!closing) {
-    stopEvery(searchKeyTimer);
-    hotkey?.close();
-    semantic?.clear();
-    aria2?.close();
-    updates?.close();
-    updateNotification?.close();
-    ntfsClosing = ntfs?.close();
-  }
-  if (monitor && !quitReady) {
-    event.preventDefault();
-    if (closing) return;
-    closing = true;
-    Promise.allSettled([monitor.close(), ntfsClosing, searches?.close(), diagnostics?.close()]).then(() => {
+  if (quitReady) return;
+  event.preventDefault();
+  if (closing) return;
+  closing = true;
+  // Closing via the tray is a real exit, not a request to hide the window.
+  // Destroy the renderer before stopping IPC services so it cannot issue
+  // more searches or show spurious search errors during cleanup.
+  stopEvery(searchKeyTimer);
+  try { tray?.destroy(); } catch {}
+  tray = undefined;
+  try { if (window && !window.isDestroyed()) window.destroy(); } catch {}
+  shutdown = createShutdown({
+    tasks: [
+      () => hotkey?.close(),
+      () => semantic?.clear(),
+      () => aria2?.close(),
+      () => updates?.close(),
+      () => updateNotification?.close(),
+      () => monitor?.close(),
+      () => ntfs?.close(),
+      () => searches?.close(),
+      () => diagnostics?.close(),
+    ],
+    finalize: () => {
       index?.close();
       index = undefined;
       quitReady = true;
       app.quit();
-    });
-    return;
-  }
-  closing = true;
-  tray?.destroy();
-  tray = undefined;
-  index?.close();
-  index = undefined;
+    },
+    forceExit: () => {
+      // Normal cleanup has already been requested. SQLite committed WAL
+      // transactions remain recoverable; do not close a busy database here.
+      console.warn("FileRecall shutdown exceeded its cleanup deadline or failed.");
+      app.exit(0);
+    },
+  });
+  shutdown.start();
 });
