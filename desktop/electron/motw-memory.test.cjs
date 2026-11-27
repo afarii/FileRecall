@@ -77,3 +77,23 @@ test("source memory rejects unsafe URL and searches only persisted source observ
   assert.equal(memory.search("example.org")[0].canOpenSource, true);
   assert.equal(memory.search("other").length, 0);
 });
+
+
+test("Windows capture reads actual Zone.Identifier ADS using real filesystem identity", { skip: process.platform !== "win32" }, async (t) => {
+  const { mkdtemp, writeFile, lstat, rm } = require("node:fs/promises");
+  const { tmpdir } = require("node:os");
+  const { join } = require("node:path");
+  const root = await mkdtemp(join(tmpdir(), "filerecall-ads-"));
+  const memory = new MotwMemory(":memory:");
+  t.after(async () => { memory.close(); await rm(root, { recursive: true, force: true }); });
+  const path = join(root, "10mb.dat");
+  await writeFile(path, "sample");
+  await writeFile(path + ":Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=https://testfile.cc/\r\n");
+  const info = await lstat(path, { bigint: true });
+  const target = { volume: "test-volume", id: String(info.ino), path };
+  const capture = createMotwCapture({ memory, resolve: async () => target });
+  t.after(() => capture.close());
+  const evidence = await capture.capture(target.volume, target.id);
+  assert.equal(evidence?.referrerUrl, "https://testfile.cc/");
+  assert.equal(memory.search("testfile.cc")[0]?.name, "10mb.dat");
+});
