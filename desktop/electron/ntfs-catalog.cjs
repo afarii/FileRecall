@@ -3,6 +3,7 @@
 const { DatabaseSync } = require("node:sqlite");
 const { win32 } = require("node:path");
 const { nameSearchKeys, queryTerms, termGroups, termCondition } = require("./filename-search.cjs");
+const { prepareQuery, scoreFile, compareFiles } = require("./search-relevance.cjs");
 
 const DIRECTORY = 0x10;
 const DELETE = 0x200;
@@ -363,12 +364,13 @@ class NtfsCatalog {
   }
 
   search(drive, query, { fastOnly = false } = {}) {
-    const terms = queryTerms(query);
+    const prepared = prepareQuery(query);
+    const terms = prepared.terms;
     if (!terms.length) return [];
     // File extensions usually occur at the end, so anchor indexed candidates
     // on a filename/phonetic token before filtering by extension.
     const extensions = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "zip", "rar", "7z", "png", "jpg", "jpeg", "gif", "mp3", "mp4", "html", "json", "csv", "exe", "dll", "sys"];
-    const isExtension = (term) => extensions.includes(term.replace(/^\./, ""));
+    const isExtension = (term) => term.length >= 2 && extensions.some((ext) => ext.startsWith(term.replace(/^\./, "")));
     const orderedTerms = [...new Set(terms)].sort((a, b) =>
       Number(isExtension(a)) - Number(isExtension(b)) || b.length - a.length || a.localeCompare(b));
     const rawPrimary = orderedTerms[0];
@@ -421,7 +423,7 @@ class NtfsCatalog {
         if (!path || path === applicationData || below(path, applicationData)) continue;
         seen.add(row.id);
         results.push(row);
-        if (results.length === 100) break;
+
       }
     }
 
@@ -445,7 +447,6 @@ class NtfsCatalog {
         ? (anchor.length <= 2 ? ["i.initials", "i.folded", "i.pinyin"]
           : ["i.folded", "i.pinyin", "i.initials"]) : ["i.folded"];
       for (const column of columnsToTry) {
-        if (results.length >= 100) break;
         const index = { "i.folded": "ntfs_item_name", "i.initials": "ntfs_item_initials", "i.pinyin": "ntfs_item_pinyin" }[column];
         // Materialize a bounded indexed range BEFORE joins and secondary filters.
         // Otherwise SQLite can choose a drive-wide scan on a broad prefix,
@@ -456,10 +457,9 @@ class NtfsCatalog {
           columns + " " + from.replace("ntfs_item i", "candidates i") +
           " WHERE " + others.where + " LIMIT ?";
         const matches = this.db.prepare(sql).all(drive, anchor, anchor + "\uffff",
-          fastOnly ? 768 : 8192, ...others.args, 100 - results.length);
+          fastOnly ? 768 : 8192, ...others.args, 100);
         collect(matches);
       }
-      if (results.length >= 100) break;
     }
     // Short initials such as "sy" are handled by indexed prefix scans. Avoid an
     // O(entire disk) infix scan on each keystroke while an input is still changing.
@@ -474,28 +474,8 @@ class NtfsCatalog {
     return rank(results);
 
     function rank(matches) {
-      const systemPath = /\\(?:windows|program files|program files \(x86\)|programdata)\\/i;
-      const documentType = /\.(?:pdf|docx?|xlsx?|pptx?|md|txt|csv)$/i;
-      for (const row of matches) {
-        const name = row.folded || row.name.toLowerCase();
-        const chinese = /\p{Script=Han}/u.test(row.name);
-        let score = Math.min(900, Math.log2(1 + row.useCount) * 220);
-        if (row.favorite) score += 180;
-        if (name === query) score += 700;
-        else if (name.startsWith(primary)) score += 280;
-        else if (chinese && row.initials?.startsWith(primary)) score += 370;
-        else if (row.pinyin?.startsWith(primary)) score += 310;
-        else score += 80;
-        if (documentType.test(row.name)) score += 125;
-        if (row.isDirectory) score -= 45;
-        if (/\.(?:sys|dll|exe|mui|log)$/i.test(row.name)) score -= 200;
-        if (systemPath.test(row.directory || "")) score -= 190;
-        row.matchScore = Math.round(score);
-      }
-      matches.sort((a, b) => b.matchScore - a.matchScore ||
-        b.useCount - a.useCount || b.lastUsedAt - a.lastUsedAt ||
-        a.name.localeCompare(b.name));
-      return matches;
+      for (const row of matches) row.matchScore = scoreFile(row, prepared);
+      return matches.sort(compareFiles).slice(0, 100);
     }
   }
 

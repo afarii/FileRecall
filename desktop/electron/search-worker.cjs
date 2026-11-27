@@ -10,6 +10,7 @@ const { NtfsCatalog, fullPath } = require("./ntfs-catalog.cjs");
 const { DownloadSources } = require("./download-sources.cjs");
 const { existsSync } = require("node:fs");
 const { mergeFileSearch } = require("./unified-search.cjs");
+const { compareFiles } = require("./search-relevance.cjs");
 
 let local;
 let ntfs;
@@ -106,8 +107,7 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
           matchScore: row.matchScore || 0,
           favorite: row.favorite || 0,
         }))) : [];
-      files.sort((a, b) => b.matchScore - a.matchScore ||
-        b.useCount - a.useCount || b.lastUsedAt - a.lastUsedAt || a.path.localeCompare(b.path));
+      files.sort(compareFiles);
       files = files.slice(0, 100);
     } else {
       throw new Error("未知搜索类型");

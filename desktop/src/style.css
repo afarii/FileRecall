@@ -237,3 +237,14 @@ body { background: var(--fr-paper); }
   .app-actions button { padding: 7px 8px; }
   .search-content { padding-top: 18px; }
 }
+
+/* Keep the previous result list visually stable while a newer query is pending. */
+.result-row:disabled, .history-toggle:disabled, .show-more:disabled { opacity: 1; }
+.result-row:disabled:hover { background: transparent; border-color: transparent; }
+.search-delay-spinner {
+  width: 14px; height: 14px; flex: 0 0 14px;
+  border: 1.5px solid var(--fr-line); border-top-color: var(--fr-muted);
+  border-radius: 50%; animation: search-delay-spin 0.85s linear infinite;
+}
+@keyframes search-delay-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .search-delay-spinner { animation: none; } }

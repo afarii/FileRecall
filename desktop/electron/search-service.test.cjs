@@ -71,8 +71,17 @@ test("worker searches local and NTFS catalogs while main thread writes usage", a
   assert.equal(after[0].useCount, 1);
   assert.equal(after[0].cached, false);
   const unified = await search.searchUnified("sy", [{ drive: "E", cached: false }]);
-  assert.equal(unified[0].type, "ntfs");
-  assert.equal(unified[0].file.name, "实验报告.pdf");
+  // Both files have the same name, but the independent local file has been
+  // used twice versus once for the NTFS file. Unified relevance should honor
+  // usage across sources while retaining the separate NTFS hit.
+  assert.equal(unified[0].type, "local");
+  assert.equal(unified[0].file.path, report);
+  assert.equal(unified[0].file.useCount, 2);
+  const ntfsHit = unified.find(({ type, file }) => type === "ntfs" && file.id === "77");
+  assert.ok(ntfsHit, "unified search retains the separate NTFS file");
+  assert.equal(ntfsHit.file.name, "实验报告.pdf");
+  assert.equal(ntfsHit.file.useCount, 1);
+  assert.ok(unified[0].file.matchScore > ntfsHit.file.matchScore);
   ntfs.favorite("E", "77", true);
   const favorites = await search.searchUnified("", [{ drive: "E", cached: false }], true);
   assert.equal(favorites[0].file.name, "实验报告.pdf");
