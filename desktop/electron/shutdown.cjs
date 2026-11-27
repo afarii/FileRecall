@@ -20,8 +20,13 @@ function createShutdown({ tasks, finalize, forceExit, timeoutMs = 5000 }) {
     if (started) return;
     started = true;
     timer = setTimeout(() => finish(true), timeoutMs);
-    Promise.allSettled(tasks.map(task => Promise.resolve().then(task)))
-      .then(() => finish(false));
+    // Invoke each stop operation synchronously: monitors must reject new work
+    // immediately, even before the first microtask after before-quit returns.
+    const cleanup = tasks.map(task => {
+      try { return Promise.resolve(task()); }
+      catch (error) { return Promise.reject(error); }
+    });
+    Promise.allSettled(cleanup).then(() => finish(false));
   }
   return { start, get started() { return started; } };
 }
