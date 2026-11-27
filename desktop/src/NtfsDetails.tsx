@@ -54,7 +54,7 @@ export default function NtfsDetails({ file, onClose, onFavoriteChanged }: {
       {error && <p className="error" role="alert">{error}</p>}
     </section>
     {!file.directory && !file.cached && <section className="detail-section">
-      <h3>文件来源线索</h3>
+      <h3>文件来源</h3>
       <NtfsSourceInfo key={file.drive + ":" + file.id + ":" + file.path} drive={file.drive} fileId={file.id} />
       <MotwInfo drive={file.drive} fileId={file.id} />
     </section>}
