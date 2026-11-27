@@ -3,10 +3,10 @@
 const { Worker } = require("node:worker_threads");
 const { join } = require("node:path");
 
-function createSearchService({ localDatabase, ntfsDatabase, downloadsDatabase, applicationData, onMetric = () => {} }) {
+function createSearchService({ localDatabase, ntfsDatabase, downloadsDatabase, motwDatabase, applicationData, onMetric = () => {} }) {
   const createChannel = (searchKind) => {
     const worker = new Worker(join(__dirname, "search-worker.cjs"), {
-      workerData: { localDatabase, ntfsDatabase, downloadsDatabase, applicationData },
+      workerData: { localDatabase, ntfsDatabase, downloadsDatabase, motwDatabase, applicationData },
     });
     worker.unref();
     const pending = new Map();
