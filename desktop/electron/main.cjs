@@ -14,6 +14,7 @@ const { createHotkey } = require("./hotkey.cjs");
 const { semanticModel } = require("./semantic-model.cjs");
 const { createSemanticSearch } = require("./semantic-search.cjs");
 const { createProvenance } = require("./provenance.cjs");
+const { NtfsSourceLinks, createNtfsProvenance } = require("./ntfs-provenance.cjs");
 const { createAria2Connection } = require("./aria2-connection.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { createNtfsService } = require("./ntfs-service.cjs");
@@ -301,11 +302,44 @@ app.whenReady().then(() => {
     }
   }
   const provenance = createProvenance(index, readDownloads);
+  // This tiny database is accessed only on source-detail actions, never on
+  // the filename keystroke hot path. Open and close each operation explicitly.
+  async function withNtfsProvenance(action) {
+    const links = new NtfsSourceLinks(join(userData, "ntfs-source-links.sqlite"));
+    try {
+      return await action(createNtfsProvenance({
+        links, target: (drive, id) => ntfs?.sourceTarget(drive, id),
+        resolve: (volume, id) => ntfs?.sourceTargetForVolume(volume, id),
+        readDownloads, legacyLinked: (id) => Boolean(index.linkedIdentity(id)),
+      }), links);
+    } finally { links.close(); }
+  }
+  ipcMain.handle("ntfs:provenance", (_event, drive, id) =>
+    withNtfsProvenance((service) => service.details(drive, id)));
+  ipcMain.handle("ntfs:decide-source", (_event, drive, id, identity, downloadId, decision) =>
+    monitor.run(() => withNtfsProvenance(async (service) => {
+      const result = await service.decide(drive, id, identity, downloadId, decision);
+      send("downloads:changed");
+      return result;
+    })));
+  async function linkedDownload(id) {
+    if (typeof id !== "string" || id.length > 160) return null;
+    const linked = await withNtfsProvenance((service) => service.linkedFile(id));
+    return linked ?? index.linkedFile(id);
+  }
+  ipcMain.handle("downloads:reveal-linked", async (_event, id) => {
+    const file = await linkedDownload(id);
+    if (file?.status !== "present") return false;
+    shell.showItemInFolder(file.path);
+    return true;
+  });
   ipcMain.handle("provenance:local", (_event, path) => provenance.local(path));
   ipcMain.handle("provenance:decide", (_event, path, identity, id, decision) => monitor.run(() =>
-    provenance.decide(path, identity, id, decision)));
-  ipcMain.handle("provenance:download", (_event, id) =>
-    typeof id === "string" && id.length <= 160 ? index.linkedFile(id) : null);
+    withNtfsProvenance((_service, links) => {
+      if (decision === "confirmed" && links.byDownload(id)) throw new Error("此下载已关联其他文件。");
+      return provenance.decide(path, identity, id, decision);
+    })));
+  ipcMain.handle("provenance:download", (_event, id) => linkedDownload(id));
   ipcMain.handle("files:annotate", (_event, path, expectedIdentity, input) => monitor.run(async () => {
     const identity = await index.sourceIdentity(path);
     if (!identity || identity !== expectedIdentity) throw new Error("文件状态已改变，请重新打开详情。");
