@@ -9,6 +9,7 @@ import PerformanceDiagnostics from "./PerformanceDiagnostics";
 import useSemanticSearch from "./useSemanticSearch";
 import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } from "./FileDetails";
 import logo from "../../filerecall.svg";
+import { searchDisplay, type SearchPhase } from "./search-state";
 
 type UnifiedRecord = SearchRecord | { type: "ntfs"; file: NtfsResult };
 type LocalRanking = FileRecord & { useCount?: number; lastUsedAt?: number; matchRank?: number };
@@ -44,9 +45,9 @@ export default function App() {
   const [folders, setFolders] = useState<IndexedFolder[]>([]);
   const [historyFolders, setHistoryFolders] = useState<Array<{ path: string; count: number }>>([]);
   const [clearingFolder, setClearingFolder] = useState<string | null>(null);
-  const [unifiedResult, setUnifiedResult] = useState<{ query: string; favorites: boolean; files: UnifiedRecord[] }>();
+  const [unifiedResult, setUnifiedResult] = useState<{ query: string; favorites: boolean; files: UnifiedRecord[]; phase: SearchPhase; error?: string }>();
   const [browserResult, setBrowserResult] = useState<{
-    query: string; files: BrowserDownload[]; manager?: BrowserDownload["manager"]; error?: string;
+    query: string; files: BrowserDownload[]; manager?: BrowserDownload["manager"]; pending?: boolean; error?: string;
   }>();
   const [downloadRefresh, setDownloadRefresh] = useState(0);
   const [filter, setFilter] = useState<"all" | "favorites">("all");
@@ -94,24 +95,38 @@ export default function App() {
   const reload = useCallback(async (search: string) => {
     const version = ++reloadVersion.current;
     const favorite = currentFavorite.current;
+    const isCurrent = () => version === reloadVersion.current &&
+      search === currentQuery.current && favorite === currentFavorite.current;
     const api = window.fileRecall as typeof window.fileRecall & {
       unifiedSearch: (query: string, favorites: boolean, deep?: boolean) => Promise<UnifiedRecord[]>;
     };
-    const files = await api.unifiedSearch(search, favorite);
-    if (version !== reloadVersion.current || search !== currentQuery.current || favorite !== currentFavorite.current) return;
-    setUnifiedResult({ query: search, favorites: favorite, files });
-    // A sparse prefix result is not proof of absence. Search substrings in a
-    // separate worker after a short pause, without replacing newer input.
-    if (search.trim().length < 2 || files.length >= 40) return;
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
-    if (version !== reloadVersion.current || search !== currentQuery.current || favorite !== currentFavorite.current) return;
+    setUnifiedResult((previous) => ({
+      query: search, favorites: favorite, phase: "searching",
+      files: previous?.query === search && previous.favorites === favorite ? previous.files : [],
+    }));
+    let files: UnifiedRecord[] = [];
     try {
+      files = await api.unifiedSearch(search, favorite);
+      if (!isCurrent()) return;
+      const supplement = search.trim().length >= 2 && files.length < 40;
+      setUnifiedResult({ query: search, favorites: favorite, files, phase: supplement ? "supplementing" : "complete" });
+      if (!supplement) return;
+      // The pending state includes the debounce before the background query.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+      if (!isCurrent()) return;
       const more = await api.unifiedSearch(search, favorite, true);
-      if (version !== reloadVersion.current || search !== currentQuery.current || favorite !== currentFavorite.current) return;
+      if (!isCurrent()) return;
       const merged = new Map(files.map((record) => [unifiedKey(record), record]));
       for (const record of more) if (!merged.has(unifiedKey(record))) merged.set(unifiedKey(record), record);
-      setUnifiedResult({ query: search, favorites: favorite, files: [...merged.values()] });
-    } catch { /* Keep valid instant results when a background lookup times out. */ }
+      setUnifiedResult({ query: search, favorites: favorite, files: [...merged.values()], phase: "complete" });
+    } catch {
+      if (!isCurrent()) return;
+      setUnifiedResult((previous) => ({
+        query: search, favorites: favorite,
+        files: previous?.query === search && previous.favorites === favorite ? previous.files : files,
+        phase: "failed", error: "文件检索未能完成，请重新搜索。",
+      }));
+    }
   }, []);
   const refreshFolders = useCallback(async () => {
     const [nextFolders, nextHistoryFolders] = await Promise.all([
@@ -181,9 +196,10 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    if (mode === "semantic" || filter === "favorites" || !searchQuery.trim()) return;
+    setBrowserResult((previous) => ({ query: searchQuery, manager: downloadManager, pending: true,
+      files: previous?.query === searchQuery && previous.manager === downloadManager ? previous.files : [] }));
     const timer = window.setTimeout(() => {
-      if (mode === "semantic" || filter === "favorites" ||
-        (!searchQuery.trim() && filter === "all")) return;
       window.fileRecall.downloads(searchQuery, downloadManager).then((files) => {
         if (active) setBrowserResult({ query: searchQuery, files, manager: downloadManager });
       }).catch(() => {
@@ -310,9 +326,10 @@ export default function App() {
   }
 
 
-  const matched = unifiedResult?.query === searchQuery &&
+  const inputPending = query !== searchQuery;
+  const matched = !inputPending && unifiedResult?.query === searchQuery &&
     unifiedResult.favorites === (filter === "favorites") ? unifiedResult : undefined;
-  const browser = browserResult?.query === searchQuery && browserResult.manager === downloadManager ? browserResult : undefined;
+  const browser = !inputPending && browserResult?.query === searchQuery && browserResult.manager === downloadManager ? browserResult : undefined;
   const semanticMode = mode === "semantic";
   const semanticResult = semantic.result?.query === query ? semantic.result.result : undefined;
   const localOnly = filter === "favorites";
@@ -357,8 +374,9 @@ export default function App() {
   const selectedRecord = allRecords.find((record) => unifiedKey(record) === selected);
   const hasResults = allRecords.length > 0;
   // The fast filename results render before the slower download/history enrichment completes.
-  const searchingHistory = !semanticMode && !localOnly && Boolean(searchQuery.trim()) && !browser;
-  const loading = (!error && !matched) || (searchingHistory && currentRecords.length === 0);
+  const searchingHistory = !semanticMode && !localOnly && Boolean(searchQuery.trim()) && (!browser || Boolean(browser.pending));
+  const display = searchDisplay({ inputPending, filePhase: matched?.phase, historyPending: searchingHistory,
+    historyFailed: !localOnly && Boolean(browser?.error), hasResults });
   const pastFolders = historyFolders.filter((history) => !folders.some((folder) => folder.path === history.path));
 
   function renderRecords(records: UnifiedRecord[], title: string) {
@@ -479,8 +497,10 @@ export default function App() {
           </div> : null}
           {error && <p className="error" role="alert">{error}</p>}
           {!semanticMode && browser?.error && !localOnly && <p className="error" role="alert">{browser.error}</p>}
-          {!semanticMode && !hasResults && loading && <p className="empty" role="status">正在搜索…</p>}
-          {!semanticMode && !hasResults && !loading && <p className="empty">{searchQuery.trim() || filter !== "all"
+          {!semanticMode && matched?.error && <p className="error" role="alert">{matched.error}</p>}
+          {!semanticMode && display === "searching" && <p className="empty" role="status">正在搜索…</p>}
+          {!semanticMode && display === "partial" && <p className="muted" role="status">正在补充搜索…</p>}
+          {!semanticMode && display === "empty" && <p className="empty">{searchQuery.trim() || filter !== "all"
             ? "没有找到匹配的记录。" : "输入文件名、拼音或来源即可开始搜索。常用文件会显示在这里。"}</p>}
           {renderRecords(currentRecords, semanticMode ? "相近内容" : "搜索结果")}
           {!semanticMode && historyRecords.length > 0 && <>
