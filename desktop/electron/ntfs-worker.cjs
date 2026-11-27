@@ -1,9 +1,12 @@
 "use strict";
 const { parentPort, workerData } = require("node:worker_threads");
 const { NtfsSearch } = require("./ntfs-search.cjs");
+const { MotwMemory, createMotwCapture } = require("./motw-memory.cjs");
+const { join } = require("node:path");
 const { monitorEventLoopDelay } = require("node:perf_hooks");
 
 let service;
+let memory, capture, captureTimer;
 let nextEventId = 0;
 const pendingPaths = new Map();
 const lag = monitorEventLoopDelay({ resolution: 40 });
@@ -33,12 +36,19 @@ function respond(id, action, args = []) {
       case "disable": return service.disable(args[0]);
       case "target": return service.target(args[0], args[1]);
       case "sourceTarget": return service.sourceTarget(args[0], args[1]);
+      case "captureMotw": {
+        const target = service.sourceTarget(args[0], args[1]);
+        return target && capture ? capture.capture(target.volume, target.id) : null;
+      }
       case "sourceTargetForVolume": return service.sourceTargetForVolume(args[0], args[1]);
       case "recordUse": service.catalog.recordUse(args[0], args[1]); return true;
       case "favorite": return service.catalog.favorite(args[0], args[1], args[2]);
       case "trackedDrives": service.trackedDrives = new Set(args[0]); return true;
       case "status": return read();
       case "close":
+        clearInterval(captureTimer);
+        capture?.close();
+        memory?.close();
         await service.close();
         return true;
       default: throw new Error("未知 NTFS 操作");
@@ -54,6 +64,7 @@ function respond(id, action, args = []) {
 try {
   service = new NtfsSearch(workerData.database, workerData.userData, workerData.executable, {
     trackedDrives: workerData.trackedDrives,
+    onSourceRows: (volume, rows) => capture?.events(volume, rows),
     onChange: (status) => parentPort.postMessage({
       type: "state", status, searchableDrives: service?.searchableDrives() ?? [],
     }),
@@ -64,6 +75,13 @@ try {
       parentPort.postMessage({ type: "paths", id, drive, paths });
     }),
   });
+  try {
+    memory = new MotwMemory(join(workerData.userData, "motw-memory.sqlite"));
+    capture = createMotwCapture({ memory, resolve: (volume, id) => service.sourceTargetForVolume(volume, id),
+      changed: () => parentPort.postMessage({ type: "sources" }) });
+    captureTimer = setInterval(() => void capture.tick().catch(() => {}), 250);
+    captureTimer.unref();
+  } catch { /* Source storage failure must not disable filename indexing. */ }
   parentPort.postMessage({ type: "ready", ...read() });
 } catch (error) {
   parentPort.postMessage({ type: "fatal", error: String(error.message || error) });
