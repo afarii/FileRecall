@@ -45,7 +45,7 @@ class MotwMemory {
       " ORDER BY observed DESC,id LIMIT 40").all(...matches.flatMap(x=>x.args));
     return rows.map(row => ({
       id: row.id, path: row.path, name: row.name, startedAt: row.observed,
-      sourceStatus: "candidate", sourceTitle: "Windows 来源线索",
+      sourceStatus: "candidate", sourceTitle: row.referrer || row.host,
       domain: new URL(row.referrer || row.host).hostname,
       manager: "motw", canOpenSource: Boolean(safeHttpUrl(row.referrer) || safeHttpUrl(row.host)),
     }));
