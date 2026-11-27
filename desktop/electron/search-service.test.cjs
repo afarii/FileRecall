@@ -132,3 +132,24 @@ test("slow download-source results run in their own worker and are searchable by
   // The primary filename worker remains independently usable.
   assert.deepEqual(await search.searchUnified("old", []), []);
 });
+
+
+test("MOTW source lookup runs independently of filename search and works without browser extension", async (t) => {
+  const { MotwMemory } = require("./motw-memory.cjs");
+  const root = await mkdtemp(join(tmpdir(), "filerecall-motw-search-"));
+  const localDatabase = join(root, "files.sqlite");
+  const motwDatabase = join(root, "motw-memory.sqlite");
+  const local = new FileIndex(localDatabase);
+  const memory = new MotwMemory(motwDatabase);
+  const search = createSearchService({ localDatabase, motwDatabase, applicationData: root });
+  t.after(async () => { await search.close(); memory.close(); local.close(); await rm(root, {recursive:true, force:true}); });
+  memory.save({ volume:"a", id:"77", identity:"1:77:100", path:"C:\\Downloads\\10mb.dat" },
+    { referrerUrl:"https://testfile.cc/" });
+  const hits = await search.searchDownloads("testfile.cc");
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].manager, "motw");
+  assert.equal(hits[0].name, "10mb.dat");
+  assert.deepEqual(await search.searchUnified("testfile.cc", []), []);
+  memory.markDeleted("a", "77");
+  assert.equal((await search.searchDownloads("testfile.cc"))[0].id, hits[0].id);
+});
