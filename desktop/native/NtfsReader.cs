@@ -116,7 +116,8 @@ internal static class NtfsReader
                 // A filename-only catalog needs creates/deletes, renames, basic info,
                 // hard links and reparse changes. Ignore repeated content writes and
                 // close events unless an authorized folder needs them.
-                const uint NameReasons = 0x0011b300U;
+                // Named-data and stream changes may carry the download's MOTW marker.
+                const uint NameReasons = 0x0031b370U;
                 Buffer.BlockCopy(BitConverter.GetBytes(namesOnly ? NameReasons : 0xffffffffU), 0, input, 8, 4);
                 Buffer.BlockCopy(BitConverter.GetBytes(id), 0, input, 32, 8);
                 input[40] = input[42] = 2;
