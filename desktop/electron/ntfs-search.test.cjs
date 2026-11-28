@@ -78,6 +78,8 @@ test("NTFS resumes changes, moves directory descendants and rebuilds if the jour
   assert.equal(service.search("new\\report")[0].path, "E:\\New\\report中文.txt");
   assert.deepEqual(service.search("old\\report"), []);
   assert.deepEqual(service.search("notes"), []);
+  assert.equal(service.sourceStateForVolume(testVolume, "53").state, "missing");
+  assert.equal(service.sourceStateForVolume(testVolume, "52").state, "present");
   assert.ok(affected.includes("E:\\Old") && affected.includes("E:\\New"));
   assert.equal(service.catalog.drives()[0].cursor, "25");
   assert.ok(requests.some(([verb, drive, cursor]) => verb === "read" && drive === "E" && cursor === "10"));
@@ -95,6 +97,7 @@ test("NTFS resumes changes, moves directory descendants and rebuilds if the jour
   service.schedulePoll();
   await service.tail;
   assert.equal(service.status().drives[0].phase, "error");
+  assert.equal(service.sourceStateForVolume(testVolume, "53").state, "unknown");
   assert.deepEqual(service.search("listing"), []);
   await service.disable("E");
   assert.equal(service.status().drives[0].phase, "paused");
