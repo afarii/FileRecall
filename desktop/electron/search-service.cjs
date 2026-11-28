@@ -114,6 +114,7 @@ function createSearchService({ localDatabase, ntfsDatabase, downloadsDatabase, m
       return downloads.request(query, [], "downloads");
     },
     smartSources: plan => { smart ??= createChannel("smart"); return smart.request(plan, [], "smart-sources"); },
+    smartContext: (plan, drives) => { smart ??= createChannel("smart"); return smart.request(plan, drives, "smart-context"); },
     smartFiles: (query, drives, favoritesOnly = false) => { smart ??= createChannel("smart"); return smart.request(query, drives, "unified-deep", favoritesOnly); },
     searchUnified: (query, drives, favoritesOnly = false) => ntfs.request(query, drives, "unified", favoritesOnly),
     searchUnifiedDeep: (query, drives, favoritesOnly = false) => {
