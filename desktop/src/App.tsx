@@ -9,7 +9,7 @@ import PerformanceDiagnostics from "./PerformanceDiagnostics";
 import useSemanticSearch from "./useSemanticSearch";
 import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } from "./FileDetails";
 import logo from "../../filerecall.svg";
-import { searchDisplay, preservePreviousResults, canActivateSearchResult, type SearchPhase } from "./search-state";
+import { searchDisplay, preservePreviousResults, canActivateSearchResult, fastSearchSnapshot, type SearchPhase } from "./search-state";
 
 type UnifiedRecord = SearchRecord | { type: "ntfs"; file: NtfsResult };
 type LocalRanking = FileRecord & { useCount?: number; lastUsedAt?: number; matchRank?: number };
@@ -88,15 +88,24 @@ export default function App() {
   const currentFavorite = useRef(filter === "favorites");
   currentFavorite.current = filter === "favorites";
   const reloadVersion = useRef(0);
+  const activeReload = useRef<{ query: string; favorite: boolean; dirty: boolean; promise?: Promise<void> } | null>(null);
   const [busy, setBusy] = useState(false);
   const [textEnabled, setTextEnabled] = useState<boolean>();
   const [changingText, setChangingText] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
-  const reload = useCallback(async (search: string) => {
-    const version = ++reloadVersion.current;
+  const reload = useCallback(async function refresh(search: string): Promise<void> {
     const favorite = currentFavorite.current;
+    const active = activeReload.current;
+    if (active?.query === search && active.favorite === favorite) {
+      active.dirty = true;
+      return active.promise;
+    }
+    const job: { query: string; favorite: boolean; dirty: boolean; promise?: Promise<void> } =
+      { query: search, favorite, dirty: false };
+    activeReload.current = job;
+    const version = ++reloadVersion.current;
     const isCurrent = () => version === reloadVersion.current &&
       search === currentQuery.current && favorite === currentFavorite.current;
     const api = window.fileRecall as typeof window.fileRecall & {
@@ -106,29 +115,38 @@ export default function App() {
       query: search, favorites: favorite, phase: "searching",
       files: previous?.query === search && previous.favorites === favorite ? previous.files : [],
     }));
-    let files: UnifiedRecord[] = [];
-    try {
-      files = await api.unifiedSearch(search, favorite);
-      if (!isCurrent()) return;
-      const supplement = search.trim().length >= 2 && files.length < 40;
-      setUnifiedResult({ query: search, favorites: favorite, files, phase: supplement ? "supplementing" : "complete" });
-      if (!supplement) return;
-      // The pending state includes the debounce before the background query.
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
-      if (!isCurrent()) return;
-      const more = await api.unifiedSearch(search, favorite, true);
-      if (!isCurrent()) return;
-      const merged = new Map(files.map((record) => [unifiedKey(record), record]));
-      for (const record of more) if (!merged.has(unifiedKey(record))) merged.set(unifiedKey(record), record);
-      setUnifiedResult({ query: search, favorites: favorite, files: [...merged.values()], phase: "complete" });
-    } catch {
-      if (!isCurrent()) return;
-      setUnifiedResult((previous) => ({
-        query: search, favorites: favorite,
-        files: previous?.query === search && previous.favorites === favorite ? previous.files : files,
-        phase: "failed", error: "文件检索未能完成，请重新搜索。",
-      }));
-    }
+    job.promise = (async () => {
+      let files: UnifiedRecord[] = [];
+      try {
+        files = await api.unifiedSearch(search, favorite);
+        if (!isCurrent()) return;
+        const supplement = search.trim().length >= 2 && files.length < 40;
+        setUnifiedResult(previous => fastSearchSnapshot(previous, search, favorite, files, supplement));
+        if (!supplement) return;
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+        if (!isCurrent()) return;
+        const more = await api.unifiedSearch(search, favorite, true);
+        if (!isCurrent()) return;
+        const merged = new Map(files.map((record) => [unifiedKey(record), record]));
+        for (const record of more) merged.set(unifiedKey(record), record);
+        setUnifiedResult({ query: search, favorites: favorite, files: [...merged.values()], phase: "complete" });
+      } catch {
+        if (!isCurrent()) return;
+        setUnifiedResult((previous) => ({
+          query: search, favorites: favorite,
+          files: previous?.query === search && previous.favorites === favorite ? previous.files : files,
+          phase: "failed", error: "文件检索未能完成，请重新搜索。",
+        }));
+      } finally {
+        if (activeReload.current === job) {
+          activeReload.current = null;
+          // An index event during a search requests one follow-up, rather than
+          // repeatedly cancelling the in-flight deep query.
+          if (job.dirty && isCurrent()) void refresh(search);
+        }
+      }
+    })();
+    return job.promise;
   }, []);
   const refreshFolders = useCallback(async () => {
     const [nextFolders, nextHistoryFolders] = await Promise.all([
