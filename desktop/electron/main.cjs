@@ -16,7 +16,7 @@ const { createSemanticSearch } = require("./semantic-search.cjs");
 const { createProvenance } = require("./provenance.cjs");
 const { NtfsSourceLinks, createNtfsProvenance, verifiedTarget } = require("./ntfs-provenance.cjs");
 const { MotwMemory } = require("./motw-memory.cjs");
-const { historicalLocation, resolveRememberedFile } = require("./recycle-path.cjs");
+const { historicalLocation, resolveRememberedFile, isRecyclePath } = require("./recycle-path.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { createNtfsService } = require("./ntfs-service.cjs");
 const { createSearchService } = require("./search-service.cjs");
@@ -177,6 +177,7 @@ app.whenReady().then(() => {
       try {
         ntfs = createNtfsService(join(userData, "ntfs-index.sqlite"), userData, ntfsReader, {
           trackedDrives: trackedDrives(),
+          sourceRoots: [...new Set(["downloads", "documents", "desktop"].map(name => app.getPath(name)).filter(Boolean))],
           onChange: (state) => send("ntfs:changed", state),
           onPaths: (drive, paths) => monitor.applyJournal(drive, paths),
           onActiveDrives: (drives) => monitor.setJournalDrives(drives),
@@ -322,6 +323,10 @@ app.whenReady().then(() => {
     const memory = new MotwMemory(motwPath, { readOnly: true });
     try { return memory.byId(id) ?? null; } finally { memory.close(); }
   }
+  ipcMain.handle("sources:status", () => ntfs?.sourceSettings() ?? { available:false, enabled:false,count:0 });
+  ipcMain.handle("sources:enabled", (_event, enabled) => ntfs?.setSourceEnabled(enabled));
+  ipcMain.handle("sources:clear", () => ntfs?.clearSources());
+  ipcMain.handle("sources:forget", (_event,id) => ntfs?.forgetSource(id) ?? false);
   async function resolveMotw(row) {
     return resolveRememberedFile(row, (volume, id) => ntfs?.sourceStateForVolume(volume, id), verifiedTarget);
   }
@@ -331,6 +336,27 @@ app.whenReady().then(() => {
     const linked = await withNtfsProvenance((service) => service.linkedFile(id));
     return linked ?? index.linkedFile(id);
   }
+  async function liveMotw(id) {
+    const row = motwRecord(id);
+    if (!row || row.deleted) return null;
+    const current = await verifiedTarget(await ntfs?.sourceTargetForVolume(row.volume, row.frn));
+    return current?.identity === row.identity && !isRecyclePath(current.path) ? current : null;
+  }
+  ipcMain.handle("sources:open-file", async (_event, id) => {
+    const current = await liveMotw(id);
+    if (!current) return false;
+    const error = await shell.openPath(current.path);
+    if (!error) void ntfs.recordUse(current.drive,current.id).catch(() => {});
+    return !error;
+  });
+  ipcMain.handle("sources:favorite", async (_event, id, enabled) => {
+    if (typeof enabled !== "boolean") return false;
+    const current = await liveMotw(id);
+    if (!current) return false;
+    const ok = await ntfs.favorite(current.drive,current.id,enabled);
+    if (ok) notifyChanged();
+    return ok;
+  });
   ipcMain.handle("downloads:reveal-linked", async (_event, id) => {
     const file = await linkedDownload(id);
     if (file?.status !== "present") return false;
