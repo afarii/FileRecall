@@ -62,18 +62,32 @@ function similarity(left, right) {
   return score;
 }
 
-async function search(query) {
+async function search(input) {
+  const query = typeof input === "string" ? input : input.query;
+  const smart = typeof input !== "string";
+  const limit = smart ? 48 : maxDocuments;
   const db = new DatabaseSync(workerData.databasePath, { readOnly: true });
   db.exec("PRAGMA busy_timeout = 3000");
   try {
+    const clauses = ["content <> ''"];
+    const args = [];
+    if(smart && Array.isArray(input.paths)) {
+      const paths = [...new Set(input.paths)].slice(0,240);
+      if(!paths.length) return {matches:[],indexed:0,truncated:false};
+      clauses.push("lower(file_text.path) IN ("+paths.map(()=>"?").join(",")+")"); args.push(...paths.map(path=>path.toLowerCase()));
+    }
+    if(smart && input.extensions?.length){
+      clauses.push("("+input.extensions.map(()=>"lower(files.name) LIKE ?").join(" OR ")+")");args.push(...input.extensions.map(ext=>"%."+ext));
+    }
+    if(smart && input.favorites) clauses.push("EXISTS (SELECT 1 FROM file_annotations a WHERE a.file_identity=files.file_identity AND files.identity_verified=1 AND a.favorite=1)");
     const rows = db.prepare(`
       SELECT file_text.path, signature, name FROM file_text JOIN files ON files.path = file_text.path
-      WHERE content <> '' ORDER BY files.last_seen_at DESC, file_text.path LIMIT ?
-    `).all(maxDocuments + 1);
-    const truncated = rows.length > maxDocuments;
+      WHERE ${clauses.join(" AND ")} ORDER BY files.last_seen_at DESC, file_text.path LIMIT ?
+    `).all(...args,limit + 1);
+    const truncated = rows.length > limit;
     if (truncated) rows.pop();
     const paths = new Set(rows.map((row) => row.path));
-    for (const path of cache.keys()) if (!paths.has(path)) cache.delete(path);
+    if(!smart) for (const path of cache.keys()) if (!paths.has(path)) cache.delete(path);
     if (!rows.length) return { matches: [], indexed: 0, truncated };
     engine ??= await loadEngine();
     const queryVector = await engine("query: " + query);
@@ -91,6 +105,7 @@ async function search(query) {
         }
         entry = { signature: row.signature, vectors };
         cache.set(row.path, entry);
+        if(cache.size>maxDocuments)cache.delete(cache.keys().next().value);
       }
       const score = Math.max(...entry.vectors.map((vector) => similarity(queryVector, vector)));
       if (score >= minSimilarity) matches.push({ path: row.path, signature: row.signature, score });
@@ -100,7 +115,7 @@ async function search(query) {
       }
     }
     matches.sort((a, b) => b.score - a.score);
-    return { matches: matches.slice(0, 8), indexed, truncated };
+    return { matches: matches.slice(0, smart ? 24 : 8), indexed, truncated };
   } finally {
     db.close();
   }
