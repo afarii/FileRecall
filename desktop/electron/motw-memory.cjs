@@ -12,19 +12,52 @@ const STREAM = 0x200000 | 0x70;
 const RETRIES = [1000, 5000, 15000];
 const MAX_PENDING = 512;
 const keyOf = (volume, frn) => volume.toLowerCase() + ":" + frn;
+const memoryId = target => "motw:" + createHash("sha256").update(keyOf(target.volume, target.id) + ":" + target.identity).digest("hex");
 
 class MotwMemory {
   constructor(path, { readOnly = false } = {}) {
     this.db = new DatabaseSync(path, { readOnly });
     this.db.exec("PRAGMA busy_timeout=1000");
     if (!readOnly) this.db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS memory (id TEXT PRIMARY KEY, volume TEXT NOT NULL, frn TEXT NOT NULL, identity TEXT NOT NULL, path TEXT NOT NULL, name TEXT NOT NULL, host TEXT, referrer TEXT, zone INTEGER, observed INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0); CREATE INDEX IF NOT EXISTS motw_ref ON memory(volume, frn);");
+    if (!readOnly) this.db.exec("PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS source_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS forgotten (id TEXT PRIMARY KEY);");
+  }
+  setting(key, fallback) {
+    const row = this.db.prepare("SELECT value FROM source_settings WHERE key=?").get(key);
+    return row ? JSON.parse(row.value) : fallback;
+  }
+  setSetting(key, value) {
+    this.db.prepare("INSERT INTO source_settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, JSON.stringify(value));
+  }
+  enabled() { return this.setting("enabled", true); }
+  status() { return { available: true, enabled: this.enabled(), count: this.db.prepare("SELECT count(*) AS n FROM memory").get().n }; }
+  forget(id) {
+    const row = this.byId(id);
+    if (!row) return false;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("INSERT OR IGNORE INTO forgotten VALUES (?)").run(id);
+      this.db.prepare("DELETE FROM memory WHERE id=?").run(id);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (err) { this.db.exec("ROLLBACK"); throw err; }
+  }
+  clear() {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.setSetting("enabled", false);
+      this.db.exec("INSERT OR IGNORE INTO forgotten SELECT id FROM memory");
+      const n = this.db.prepare("DELETE FROM memory").run().changes;
+      this.db.exec("COMMIT");
+      return n;
+    } catch (err) { this.db.exec("ROLLBACK"); throw err; }
   }
   save(target, evidence, now = Date.now()) {
     if (isRecyclePath(target.path)) return false;
     const host = safeHttpUrl(evidence?.hostUrl);
     const referrer = safeHttpUrl(evidence?.referrerUrl);
     if (!host && !referrer) return false;
-    const id = "motw:" + createHash("sha256").update(keyOf(target.volume, target.id) + ":" + target.identity).digest("hex");
+    const id = memoryId(target);
+    if (!this.enabled() || this.db.prepare("SELECT 1 FROM forgotten WHERE id=?").get(id)) return false;
     return Boolean(this.db.prepare(
       "INSERT INTO memory VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET path=excluded.path,name=excluded.name,host=excluded.host,referrer=excluded.referrer,zone=excluded.zone,deleted=0 WHERE memory.path<>excluded.path OR memory.host IS NOT excluded.host OR memory.referrer IS NOT excluded.referrer OR memory.zone IS NOT excluded.zone OR memory.deleted<>0"
     ).run(id, target.volume.toLowerCase(), target.id, target.identity, target.path,
@@ -58,7 +91,7 @@ class MotwMemory {
 
 function createMotwCapture({ memory, resolve, read = readMotw, verify = verifiedTarget, now = Date.now, changed = () => {} }) {
   const pending = new Map();
-  let running = false, closed = false;
+  let running = false, closed = false, generation = 0;
   function queue(volume, id, attempt = 0) {
     const key = keyOf(volume, id);
     if (pending.has(key)) pending.delete(key);
@@ -66,7 +99,7 @@ function createMotwCapture({ memory, resolve, read = readMotw, verify = verified
     pending.set(key, { volume, id, attempt, due: now() + RETRIES[attempt] });
   }
   function events(volume, rows) {
-    if (closed) return;
+    if (closed || !memory.enabled()) return;
     let updated = false;
     for (const row of rows) {
       if (row.attributes & (0x10 | 0x400)) continue;
@@ -81,18 +114,20 @@ function createMotwCapture({ memory, resolve, read = readMotw, verify = verified
     if (updated) changed();
   }
   async function capture(volume, id) {
+    if (closed || !memory.enabled()) return null;
+    const epoch = generation;
     const before = await verify(await resolve(volume, id));
     if (!before || isRecyclePath(before.path)) return null;
     const evidence = await read(before.path);
     const after = await verify(await resolve(volume, id));
-    if (!after || isRecyclePath(after.path) || before.identity !== after.identity || before.path !== after.path || closed) return null;
+    if (!after || isRecyclePath(after.path) || before.identity !== after.identity || before.path !== after.path || closed || epoch !== generation || !memory.enabled()) return null;
     const updatedPath = memory.updatePath(after);
     const saved = evidence && memory.save(after, evidence);
     if (saved || updatedPath) changed();
     return evidence;
   }
   async function tick() {
-    if (running || closed) return;
+    if (running || closed || !memory.enabled()) return;
     running = true;
     try {
       for (const [key, item] of [...pending]) {
@@ -109,7 +144,8 @@ function createMotwCapture({ memory, resolve, read = readMotw, verify = verified
       }
     } finally { running = false; }
   }
-  return { events, capture, tick, size: () => pending.size,
+  return { events, capture, tick, size: () => pending.size, idle: () => !running && pending.size === 0,
+    invalidate() { generation++; pending.clear(); },
     close() { closed = true; pending.clear(); } };
 }
 
