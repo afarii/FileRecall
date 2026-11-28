@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   clearSources: () => ipcRenderer.invoke("sources:clear"),
   forgetSource: (id) => ipcRenderer.invoke("sources:forget", id),
   openSourceFile: (id) => ipcRenderer.invoke("sources:open-file", id),
+  restoreSourceFile: (id) => ipcRenderer.invoke("sources:restore", id),
   sourceFileState: (id) => ipcRenderer.invoke("sources:file-state", id),
   favoriteSourceFile: (id, enabled) => ipcRenderer.invoke("sources:favorite", id, enabled),
   revealLinkedDownload: (id) => ipcRenderer.invoke("downloads:reveal-linked", id),
