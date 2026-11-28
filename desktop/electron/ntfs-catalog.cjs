@@ -175,6 +175,10 @@ class NtfsCatalog {
     return win32.join(drive + ":\\", ...names.reverse());
   }
 
+  hasItem(drive, id) {
+    return Boolean(this.db.prepare("SELECT 1 FROM ntfs_item WHERE drive=? AND id=?").get(drive, id));
+  }
+
   item(drive, id) {
     const row = this.db.prepare(`
       SELECT i.name, i.parent, p.path AS directory, i.directory AS isDirectory
