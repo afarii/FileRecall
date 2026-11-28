@@ -31,6 +31,8 @@ function dateRange(label, now) {
 function parseSmartQuery(raw, now=Date.now()) {
   if(typeof raw!=="string" || !raw.trim() || raw.length>200) throw new Error("请输入 1–200 字的找回描述。");
   let text=raw.trim(), range=null, domain="", status="", favorites=false, recorded=false;
+  if(/上上周|前天|去年|今年|\d{4}年|\d+月\d+日|\d+天前/.test(text))throw new Error("目前支持今天、昨天、本周、上周、本月、上个月和最近 N 天。");
+  if(/(?:今天|昨天|上周|本周|上个月|本月|最近|近\d+天).*(?:修改|创建|访问|打开)/.test(text))throw new Error("智能找回目前支持下载或首次观察时间，暂不支持修改、创建或访问时间。");
   const dates=text.match(/上个月|这个月|上月|本月|上周|本周|这周|昨天|今天|最近\s*\d+\s*天|近\s*\d+\s*天|最近/g)||[];
   if(dates.length>1) throw new Error("请每次指定一个时间范围。");
   if(dates.length){range=dateRange(dates[0],now);text=text.replace(dates[0]," ");}
