@@ -69,10 +69,13 @@ function parseSmartQuery(raw, now=Date.now()) {
   // Recognize a final category noun, preserving subjects like 软件工程.
   text=text.replace(/(?:应用软件|应用程序|软件|程序)(?=\s*(?:[，。！？；、]?\s*$))/g,()=>{category="software";return " ";});
   if(category==="software"&&!extensions.length)extensions.push(...softwareTypes);
+  // A courseware noun at the end (or followed by an explicit type already
+  // extracted above) describes the file category, not a required filename.
+  text=text.replace(/(?:教学课件|课程课件|课件|教学幻灯片)(?=\s*(?:[，。！？；、]?\s*$))/g,()=>{category="courseware";return " ";});
+  if(category==="courseware"&&!extensions.length)extensions.push("ppt","pptx","pdf","odp");
   text=text.replace(/(?:请帮我|帮我|我想|我记得|找一下|找到|查找|搜索|找回|之前|以前|已经|下载|来自|获取|保存|有关|关于|相关|文件|资料|文档|的|从|了|但|在|我)/g," ");
   text=text.replace(/[，。！？；、："'“”‘’]/g," ").replace(/\s+/g," ").trim();
-  // Avoid treating generic nouns as an exact keyword. '课件' / '报告' are
-  // useful topics and are kept.
+  // Keep specific topics and document titles after extracting categories.
   const plan={topic:text,domain,extensions:[...new Set(extensions)],range,status,favorites,recorded,category};
   if(!plan.topic&&!plan.domain&&!plan.extensions.length&&!plan.range&&!plan.status&&!plan.favorites&&!plan.recorded) throw new Error("请描述文件名、主题、来源或时间。");
   return plan;
