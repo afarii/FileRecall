@@ -97,3 +97,73 @@ test("Windows capture reads actual Zone.Identifier ADS using real filesystem ide
   assert.equal(evidence?.referrerUrl, "https://testfile.cc/");
   assert.equal(memory.search("testfile.cc")[0]?.name, "10mb.dat");
 });
+
+
+test("recycle and clear retain last normal name across reopening the database", async (t) => {
+  const { mkdtemp, rm } = require("node:fs/promises");
+  const { tmpdir } = require("node:os");
+  const { join } = require("node:path");
+  const { isRecyclePath, resolveRememberedFile } = require("./recycle-path.cjs");
+  const root = await mkdtemp(join(tmpdir(), "filerecall-recycle-"));
+  const database = join(root, "memory.sqlite");
+  let memory = new MotwMemory(database);
+  t.after(async () => { memory?.close(); await rm(root, { recursive:true, force:true }); });
+  const volume = "volume-a";
+  const original = "C:\\Downloads\\abc.dat";
+  const recycled = "C:\\$Recycle.Bin\\S-1-5-21-123\\$R986WRR.dat";
+  let current = { volume, id: "77", identity: "1:77:100", path: original };
+  const evidence = { referrerUrl: "https://testfile.cc/" };
+  const capture = createMotwCapture({ memory, resolve: async () => current,
+    verify: async row => row, read: async () => evidence });
+  assert.equal(isRecyclePath(recycled), true);
+  assert.equal(isRecyclePath("c:/\$RECYCLE.BIN/SID/\$R1.dat"), true);
+  assert.equal(isRecyclePath("C:\\Downloads\\$Report.dat"), false);
+  assert.equal(isRecyclePath("C:\\Downloads\\$Recycle.Bin\\foo"), false);
+  await capture.capture(volume, "77");
+  const id = memory.search("testfile.cc")[0].id;
+  current = {...current, path: recycled};
+  assert.equal(await capture.capture(volume, "77"), null);
+  assert.equal(memory.save(current, evidence), false);
+  assert.equal(memory.updatePath(current), false);
+  assert.equal(memory.search("testfile.cc")[0].name, "abc.dat");
+  const lookup = async () => current ? {state:"present", target:current} : {state:"missing"};
+  const verify = async row => row;
+  assert.deepEqual(await resolveRememberedFile(memory.byId(id), lookup, verify),
+    {path:original,name:"abc.dat",status:"missing",recycled:true});
+  current = {...current, path:"C:\\Restored\\abc.dat"};
+  await capture.capture(volume, "77");
+  assert.equal(memory.search("testfile.cc")[0].path, current.path);
+  current = {...current,path:recycled};
+  await capture.capture(volume, "77");
+  capture.events(volume, [{ id:"77", attributes:0, reason:0x200 }]);
+  current = null;
+  capture.close();
+  memory.close();
+  memory = null;
+  memory = new MotwMemory(database);
+  assert.deepEqual(await resolveRememberedFile(memory.byId(id), lookup, verify),
+    {path:"C:\\Restored\\abc.dat",name:"abc.dat",status:"missing"});
+  assert.equal(memory.search("testfile.cc").length, 1);
+  assert.equal(memory.search("$R986WRR.dat").length, 0);
+});
+
+test("legacy recycle pollution hides synthetic names without inventing history; offline is unknown", async t => {
+  const { resolveRememberedFile } = require("./recycle-path.cjs");
+  const memory = new MotwMemory(":memory:");
+  t.after(() => memory.close());
+  const row = { volume:"a",id:"77",identity:"original",path:"C:\\Downloads\\abc.dat" };
+  memory.save(row,{referrerUrl:"https://testfile.cc/"});
+  const id = memory.search("testfile.cc")[0].id;
+  memory.db.prepare("UPDATE memory SET path=?,name=? WHERE id=?")
+    .run("C:\\$Recycle.Bin\\SID\\$R123.dat","$R123.dat",id);
+  assert.equal(memory.search("testfile.cc")[0].name,"原文件名未知");
+  assert.equal(memory.search("testfile.cc")[0].path,"");
+  const stored = memory.byId(id);
+  const verify = async row => row;
+  assert.equal(await resolveRememberedFile(stored, async () => ({state:"unknown"}), verify),null);
+  assert.equal(await resolveRememberedFile(stored, async () => ({state:"present",target:{...row,identity:"replacement"}}),verify),null);
+  assert.deepEqual(await resolveRememberedFile(stored, async () => ({state:"missing"}), verify),
+    {path:"",name:"原文件名未知",status:"missing"});
+  assert.deepEqual(await resolveRememberedFile(stored, async () => ({state:"present",target:row}), verify),
+    {path:row.path,name:"abc.dat",status:"present"});
+});
