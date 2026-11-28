@@ -408,7 +408,7 @@ app.whenReady().then(() => {
         resolveSource:async (row,favorites)=>{
           if(row.manager==="motw"){
             const saved=motwRecord(row.id);
-            if(!saved)return {...row,pathStatus:"unknown"};
+            if(!saved)return null;
             const linked=await resolveMotw(saved);
             const current=favorites&&linked?.status==="present"?await liveMotw(row.id):null;
             return {...row,path:linked?.path??row.path,name:linked?.name??row.name,
