@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, Notification, safeStorage, shell, Tray } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, Notification, shell, Tray } = require("electron");
 const { existsSync } = require("node:fs");
 const { lstat } = require("node:fs/promises");
 const { join } = require("node:path");
@@ -17,7 +17,6 @@ const { createProvenance } = require("./provenance.cjs");
 const { NtfsSourceLinks, createNtfsProvenance, verifiedTarget } = require("./ntfs-provenance.cjs");
 const { MotwMemory } = require("./motw-memory.cjs");
 const { historicalLocation, resolveRememberedFile } = require("./recycle-path.cjs");
-const { createAria2Connection } = require("./aria2-connection.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { createNtfsService } = require("./ntfs-service.cjs");
 const { createSearchService } = require("./search-service.cjs");
@@ -32,7 +31,6 @@ let index;
 let monitor;
 let hotkey;
 let semantic;
-let aria2;
 let updates;
 let ntfs;
 let searches;
@@ -280,16 +278,6 @@ app.whenReady().then(() => {
     return { files, indexed, truncated };
   });
   const downloadsPath = join(userData, "browser-downloads.sqlite");
-  aria2 = createAria2Connection(userData, safeStorage, (records) => {
-    if (!records.length) return 0;
-    const sources = new DownloadSources(downloadsPath);
-    try { return sources.importAria2(records); }
-    finally { sources.close(); }
-  }, () => send("downloads:changed"));
-  ipcMain.handle("aria2:status", () => aria2.status());
-  ipcMain.handle("aria2:connect", (_event, port, secret) => aria2.connect(port, secret));
-  ipcMain.handle("aria2:refresh", () => aria2.refresh());
-  ipcMain.handle("aria2:disconnect", () => aria2.disconnect());
   const connection = app.isPackaged && process.platform === "win32"
     ? chromeConnection(app.getPath("userData"), process.resourcesPath)
     : null;
@@ -521,7 +509,6 @@ app.on("before-quit", (event) => {
     tasks: [
       () => hotkey?.close(),
       () => semantic?.clear(),
-      () => aria2?.close(),
       () => updates?.close(),
       () => updateNotification?.close(),
       () => monitor?.close(),
