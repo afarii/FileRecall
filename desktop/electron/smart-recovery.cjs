@@ -42,7 +42,7 @@ async function smartRecovery(raw, deps, { useModel=true, now=Date.now() }={}){
     const checked=await mapBounded(rows,async row=>{
       try { return await deps.resolveSource(row,plan.favorites); } catch {return {...row,pathStatus:"unknown"};}
     });
-    candidates=checked.filter(row=>matchesSource(row,plan)&&(!plan.favorites||row.favorite===true))
+    candidates=checked.filter(row=>row&&matchesSource(row,plan)&&(!plan.favorites||Boolean(row.favorite)))
       .map(file=>({type:"download",file}));
     for(const r of candidates)if(matchesTopic(r.file,plan.topic))add(r,plan.topic?"主题与来源记录匹配":"来源记录匹配");
     if(plan.range)notes.push("时间按记录依据匹配：Chrome 为下载时间；Windows 来源与旧下载器记录为首次观察时间。");
@@ -66,12 +66,12 @@ async function smartRecovery(raw, deps, { useModel=true, now=Date.now() }={}){
         const sem=await deps.semantic(plan.topic,{paths:scope,extensions:plan.extensions,favorites:plan.favorites&&!plan.recorded});
         semanticUsed=true;semanticIndexed=sem.indexed;truncated ||= Boolean(sem.truncated);
         const byPath=new Map();
-        for(const file of sem.files){const path=keyPath(file.currentPath||file.path);byPath.set(path,file);}
+        for(const file of sem.files){if(file.status!=="present"&&!file.currentPath)continue;const path=keyPath(file.currentPath||file.path);byPath.set(path,file);}
         if(plan.recorded){
           for(const r of candidates)if(byPath.has(keyPath(livePath(r)))&&livePath(r)){
             // Re-check before attaching semantic evidence to a recorded identity.
             const current=await deps.resolveSource(r.file,plan.favorites);
-            if(current.pathStatus==="present"&&keyPath(current.path)===keyPath(r.file.path)&&matchesSource(current,plan))
+            if(current?.pathStatus==="present"&&keyPath(current.path)===keyPath(r.file.path)&&matchesSource(current,plan))
               add({type:"download",file:current},"本地正文语义匹配");
           }
         }else for(const file of sem.files){
