@@ -167,3 +167,49 @@ test("legacy recycle pollution hides synthetic names without inventing history; 
   assert.deepEqual(await resolveRememberedFile(stored, async () => ({state:"present",target:row}), verify),
     {path:row.path,name:"abc.dat",status:"present"});
 });
+
+
+test("privacy settings survive reopen and forgotten observations stay suppressed", async t => {
+  const { mkdtemp, rm } = require("node:fs/promises");
+  const { tmpdir } = require("node:os");
+  const { join } = require("node:path");
+  const root = await mkdtemp(join(tmpdir(),"filerecall-source-privacy-"));
+  const db = join(root,"memory.sqlite");
+  let memory = new MotwMemory(db);
+  t.after(async () => { memory?.close(); await rm(root,{recursive:true,force:true}); });
+  const target = {volume:"a",id:"77",identity:"one",path:"C:\\Downloads\\test.pdf"};
+  const evidence = {referrerUrl:"https://example.org/"};
+  assert.equal(memory.save(target,evidence),true);
+  const id = memory.search("example.org")[0].id;
+  assert.equal(memory.forget(id),true);
+  assert.equal(memory.save(target,evidence),false);
+  assert.equal(memory.search("example.org").length,0);
+  const second = {...target,id:"78",identity:"two"};
+  assert.equal(memory.save(second,evidence),true);
+  assert.equal(memory.clear(),1);
+  memory.close(); memory=null; memory=new MotwMemory(db);
+  assert.deepEqual(memory.status(),{available:true,enabled:false,count:0});
+  assert.equal(memory.save({...second,id:"79",identity:"three"},evidence),false);
+  memory.setSetting("enabled",true);
+  assert.equal(memory.save(second,evidence),false);
+  assert.equal(memory.save({...second,id:"79",identity:"three"},evidence),true);
+});
+
+test("clear during an in-flight capture cannot resurrect cleared evidence", async t => {
+  const memory = new MotwMemory(":memory:");
+  t.after(()=>memory.close());
+  const target={volume:"a",id:"77",identity:"one",path:"C:\\Downloads\\x.pdf"};
+  let release, started;
+  const waiting = new Promise(resolve=>{started=resolve});
+  const read = new Promise(resolve=>{release=resolve});
+  const capture=createMotwCapture({memory,resolve:async()=>target,verify:async x=>x,read:()=>{started();return read;}});
+  const task=capture.capture("a","77");
+  await waiting;
+  capture.invalidate();
+  memory.clear();
+  memory.setSetting("enabled",true);
+  release({referrerUrl:"https://example.org/"});
+  assert.equal(await task,null);
+  assert.equal(memory.status().count,0);
+  capture.close();
+});
