@@ -18,6 +18,7 @@ const { NtfsSourceLinks, createNtfsProvenance, verifiedTarget } = require("./ntf
 const { MotwMemory } = require("./motw-memory.cjs");
 const { historicalLocation, resolveRememberedFile, isRecyclePath } = require("./recycle-path.cjs");
 const { restoreRememberedFile } = require("./recycle-restore.cjs");
+const { smartRecovery } = require("./smart-recovery.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { createNtfsService } = require("./ntfs-service.cjs");
 const { createSearchService } = require("./search-service.cjs");
@@ -396,6 +397,37 @@ app.whenReady().then(() => {
     notifyChanged();
     return result;
   }));
+  let smartRunning = false;
+  ipcMain.handle("files:smart-search", async (_event, query, useModel) => {
+    if(closing || smartRunning)throw new Error("已有智能找回任务正在运行，请稍后重试。");
+    smartRunning=true;
+    try{
+      return await smartRecovery(query,{
+        sources:plan=>searches.smartSources(plan),
+        files:(query,favorites)=>searches.smartFiles(query,ntfs?.searchableDrives()??[],favorites),
+        resolveSource:async (row,favorites)=>{
+          if(row.manager==="motw"){
+            const saved=motwRecord(row.id);
+            if(!saved)return {...row,pathStatus:"unknown"};
+            const linked=await resolveMotw(saved);
+            const current=favorites&&linked?.status==="present"?await liveMotw(row.id):null;
+            return {...row,path:linked?.path??row.path,name:linked?.name??row.name,
+              pathStatus:linked?.recycled?"recycled":linked?.status??"unknown",favorite:Boolean(current?.favorite)};
+          }
+          // A browser path alone is not evidence that the original download
+          // still exists. Keep its historical record, but do not assert deletion.
+          return {...row,pathStatus:"unknown",favorite:false};
+        },
+        modelReady:async()=>!closing&&index?.textEnabled()&&(await model.status()).ready,
+        semantic:async(topic,options)=>{
+          if(closing||!index?.textEnabled())throw new Error("正文索引不可用。");
+          const result=await semantic.search(topic,options);
+          const files=result.matches.map(match=>index?.semanticMatch(match)).filter(Boolean);
+          return {...result,files};
+        },
+      },{useModel:useModel===true});
+    }finally{smartRunning=false;}
+  });
   ipcMain.handle("downloads:search", async (_event, query, manager) => {
     // Live typing needs a small, cheap first page; each path status check is disk I/O.
     const rows = await searches.searchDownloads(query);
