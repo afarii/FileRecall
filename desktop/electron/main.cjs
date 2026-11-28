@@ -405,6 +405,7 @@ app.whenReady().then(() => {
       return await smartRecovery(query,{
         sources:plan=>searches.smartSources(plan),
         files:(query,favorites)=>searches.smartFiles(query,ntfs?.searchableDrives()??[],favorites),
+        context:plan=>searches.smartContext(plan,ntfs?.searchableDrives()??[]),
         resolveSource:async (row,favorites)=>{
           if(row.manager==="motw"){
             const saved=motwRecord(row.id);
