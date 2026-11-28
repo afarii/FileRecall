@@ -36,3 +36,22 @@ test("quiet search preserves previous rows only while waiting and prevents stale
   assert.equal(canActivateSearchResult({ inputPending: false, showingPrevious: false, hasResults: true }), true);
   assert.equal(canActivateSearchResult({ inputPending: false, showingPrevious: false, hasResults: false }), false);
 });
+
+
+test("dowser refresh retains completed 35 results instead of flickering back to 4", async () => {
+  const { fastSearchSnapshot } = await import("../src/search-state.ts");
+  const fast = Array.from({length:4},(_,i)=>"file-"+i);
+  const full = Array.from({length:35},(_,i)=>"file-"+i);
+  let previous = fastSearchSnapshot(undefined,"dowser",false,fast,true);
+  assert.deepEqual(previous.files,fast);
+  previous = {query:"dowser",favorites:false,files:full,phase:"complete"};
+  for(let i=0;i<5;i++){
+    const refreshing = {...previous,phase:"searching"};
+    const partial = fastSearchSnapshot(refreshing,"dowser",false,fast,true);
+    assert.deepEqual(partial.files,full);
+    previous = {...partial,phase:"complete",files:full};
+  }
+  assert.deepEqual(fastSearchSnapshot(previous,"other",false,fast,true).files,fast);
+  assert.deepEqual(fastSearchSnapshot(previous,"dowser",true,fast,true).files,fast);
+  assert.deepEqual(fastSearchSnapshot(previous,"dowser",false,[],false).files,[]);
+});
