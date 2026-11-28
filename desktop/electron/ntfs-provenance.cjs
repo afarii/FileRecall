@@ -3,6 +3,7 @@
 const { DatabaseSync } = require("node:sqlite");
 const { lstat } = require("node:fs/promises");
 const { win32 } = require("node:path");
+const { isRecyclePath, historicalLocation } = require("./recycle-path.cjs");
 
 // The path is never an identity. NTFS file reference (including its sequence
 // number), volume GUID and live file birth time must all agree.
@@ -44,7 +45,7 @@ function createNtfsProvenance({ links, target, resolve, readDownloads, legacyLin
   async function live(drive, id) { return verifiedTarget(await target(drive, id), stat); }
   async function details(drive, id) {
     const current = await live(drive, id);
-    if (!current) return { identity: null, confirmed: null, candidates: [] };
+    if (!current || isRecyclePath(current.path)) return { identity: null, confirmed: null, candidates: [] };
     const link = links.byTarget(current);
     return readDownloads((sources) => ({
       identity: current.identity,
@@ -59,7 +60,7 @@ function createNtfsProvenance({ links, target, resolve, readDownloads, legacyLin
         !["confirmed", "undo"].includes(decision)) throw new Error("无效的文件关联操作。");
     const state = await details(drive, id);
     const current = await live(drive, id);
-    if (!current || !identity || current.identity !== identity || state.identity !== identity)
+    if (!current || isRecyclePath(current.path) || !identity || current.identity !== identity || state.identity !== identity)
       throw new Error("文件身份已改变，请重新打开详情。");
     if (decision === "confirmed") {
       if (state.confirmed || !state.candidates.some((row) => row.id === downloadId))
@@ -74,13 +75,13 @@ function createNtfsProvenance({ links, target, resolve, readDownloads, legacyLin
     const link = links.byDownload(id);
     if (!link) return null;
     const current = await verifiedTarget(await resolve(link.volume, link.frn), stat);
-    if (current?.identity === link.identity) {
+    if (current?.identity === link.identity && !isRecyclePath(current.path)) {
       links.updatePath(id, current);
       return { path: current.path, name: win32.basename(current.path), status: "present" };
     }
     // Keep historical evidence after deletion or disconnection; never open an
     // unrelated replacement at the original pathname.
-    return { path: link.path, name: win32.basename(link.path), status: "missing" };
+    return { ...historicalLocation(link), status: "missing" };
   }
   return { details, decide, linkedFile };
 }
