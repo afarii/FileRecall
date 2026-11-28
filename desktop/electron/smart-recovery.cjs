@@ -1,5 +1,5 @@
 "use strict";
-const { parseSmartQuery, extensionMatches, matchesSource, matchesTopic, keyPath } = require("./smart-query.cjs");
+const { parseSmartQuery, extensionMatches, matchesSource, matchesTopic, keyPath, softwareEvidence } = require("./smart-query.cjs");
 const { isRecyclePath } = require("./recycle-path.cjs");
 
 const recordKey = r => r.type==="download" ? "download:"+r.file.id
@@ -31,8 +31,10 @@ async function smartRecovery(raw, deps, { useModel=true, now=Date.now() }={}){
     const key=recordKey(record);
     const prev=records.get(key);
     if(prev){if(!prev.evidence.includes(evidence))prev.evidence.push(evidence);return;}
-    records.set(key,{...record,evidence:[evidence]});
+    const category=plan.category==="software"?softwareEvidence(record.file.name):null;
+    records.set(key,{...record,evidence:[evidence,...(category?.label?[category.label]:[])]});
   };
+  if(plan.category==="software")notes.push("安装包和可执行文件优先展示；压缩包作为可能的软件候选，未解包核验内容。");
   let candidates=[];
   if(plan.recorded){
     let rows=await deps.sources(plan);
@@ -92,7 +94,7 @@ async function smartRecovery(raw, deps, { useModel=true, now=Date.now() }={}){
     const chosen=r.type==="download"?r:prev.type==="download"?prev:r.type==="local"?r:prev;
     merged.set(key,{...chosen,evidence:[...new Set([...prev.evidence,...r.evidence])]});
   }
-  const result=[...merged.values()].sort((a,b)=>b.evidence.length-a.evidence.length ||
+  const result=[...merged.values()].sort((a,b)=>(plan.category==="software"?softwareEvidence(b.file.name).rank-softwareEvidence(a.file.name).rank:0) || b.evidence.length-a.evidence.length ||
     Number(Boolean(livePath(b)))-Number(Boolean(livePath(a))) ||
     a.file.name.localeCompare(b.file.name)||recordKey(a).localeCompare(recordKey(b)));
   return {plan,records:result.slice(0,200),notes,semanticIndexed,semanticUsed,truncated:truncated||result.length>200};
