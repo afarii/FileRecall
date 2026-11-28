@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChromeConnection from "./ChromeConnection";
-import Aria2Connection from "./Aria2Connection";
 import HotkeySettings from "./HotkeySettings";
 import DesktopUpdates from "./DesktopUpdates";
 import NtfsQuickResults from "./NtfsQuickResults";
@@ -483,7 +482,6 @@ export default function App() {
         <div className="settings-tools">
           <HotkeySettings />
           <ChromeConnection refresh={refreshDownloads} />
-          <Aria2Connection />
           <DesktopUpdates />
           <PerformanceDiagnostics />
         </div>
