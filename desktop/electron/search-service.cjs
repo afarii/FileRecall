@@ -106,12 +106,15 @@ function createSearchService({ localDatabase, ntfsDatabase, downloadsDatabase, m
   const ntfs = createChannel("ntfs");
   let deep;
   let downloads;
+  let smart;
   return {
     searchLocal: (query) => local.request(query),
     searchDownloads: (query) => {
       downloads ??= createChannel("downloads");
       return downloads.request(query, [], "downloads");
     },
+    smartSources: plan => { smart ??= createChannel("smart"); return smart.request(plan, [], "smart-sources"); },
+    smartFiles: (query, drives, favoritesOnly = false) => { smart ??= createChannel("smart"); return smart.request(query, drives, "unified-deep", favoritesOnly); },
     searchUnified: (query, drives, favoritesOnly = false) => ntfs.request(query, drives, "unified", favoritesOnly),
     searchUnifiedDeep: (query, drives, favoritesOnly = false) => {
       deep ??= createChannel("ntfs-deep");
@@ -126,7 +129,7 @@ function createSearchService({ localDatabase, ntfsDatabase, downloadsDatabase, m
     },
     async close() {
       await Promise.all([local.close(), ntfs.close(), ...(deep ? [deep.close()] : []),
-        ...(downloads ? [downloads.close()] : [])]);
+        ...(downloads ? [downloads.close()] : []), ...(smart ? [smart.close()] : [])]);
     },
   };
 }
