@@ -203,3 +203,29 @@ test("persisted MFT snapshot is searchable on restart and avoids a full enumerat
   await reopened.tail;
   assert.equal(reopened.search("sy")[0].name, "实验报告.pdf");
 });
+
+
+test("source backfill is scoped to user folders, paged and resumable", t => {
+  const { NtfsCatalog } = require("./ntfs-catalog.cjs");
+  const catalog = new NtfsCatalog(":memory:", "C:\\FileRecall-data");
+  t.after(()=>catalog.close());
+  catalog.enable("C",testVolume);
+  catalog.apply("C",[
+    row("51","5","C:\\","Downloads",{attributes:16}),
+    row("52","5","C:\\","Downloads-other",{attributes:16}),
+    row("53","51","C:\\Downloads","sub",{attributes:16}),
+    row("61","51","C:\\Downloads","a.pdf"),
+    row("62","51","C:\\Downloads","b.pdf"),
+    row("63","53","C:\\Downloads\\sub","c.pdf"),
+    row("64","52","C:\\Downloads-other","outside.pdf"),
+  ],true);
+  let cursor={}, ids=[], done=false;
+  for(let i=0;i<12;i++){
+    const step=catalog.sourceBackfillStep("C","C:\\Downloads",cursor);
+    if(step.done){done=true;break;}
+    cursor=JSON.parse(JSON.stringify(step.cursor));
+    if(step.id)ids.push(step.id);
+  }
+  assert.equal(done,true);
+  assert.deepEqual(ids,["61","62","63"]);
+});
