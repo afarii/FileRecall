@@ -362,7 +362,7 @@ class NtfsSearch {
     if (this.sessions.get(drive)?.phase !== "ready") return null;
     const volume = this.catalog.activeDrives().find((entry) => entry.drive === drive)?.volume;
     const path = this.target(drive, id);
-    return volume && path ? { drive, volume: volume.toLowerCase(), id, path } : null;
+    return volume && path ? { drive, volume: volume.toLowerCase(), id, path, favorite: Boolean(this.catalog.db.prepare("SELECT favorite FROM ntfs_usage WHERE drive=? AND id=?").get(drive,id)?.favorite) } : null;
   }
 
   sourceTargetForVolume(volume, id) {
