@@ -5,6 +5,7 @@ const { win32 } = require("node:path");
 const { queryTerms, termGroups, termCondition } = require("./query-terms.cjs");
 const { readMotw, safeHttpUrl } = require("./motw.cjs");
 const { verifiedTarget } = require("./ntfs-provenance.cjs");
+const { isRecyclePath, historicalLocation } = require("./recycle-path.cjs");
 
 const CREATE = 0x100, DELETE = 0x200, RENAME_NEW = 0x2000;
 const STREAM = 0x200000 | 0x70;
@@ -19,6 +20,7 @@ class MotwMemory {
     if (!readOnly) this.db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS memory (id TEXT PRIMARY KEY, volume TEXT NOT NULL, frn TEXT NOT NULL, identity TEXT NOT NULL, path TEXT NOT NULL, name TEXT NOT NULL, host TEXT, referrer TEXT, zone INTEGER, observed INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0); CREATE INDEX IF NOT EXISTS motw_ref ON memory(volume, frn);");
   }
   save(target, evidence, now = Date.now()) {
+    if (isRecyclePath(target.path)) return false;
     const host = safeHttpUrl(evidence?.hostUrl);
     const referrer = safeHttpUrl(evidence?.referrerUrl);
     if (!host && !referrer) return false;
@@ -29,6 +31,7 @@ class MotwMemory {
       win32.basename(target.path), host, referrer, evidence.zoneId ?? null, now).changes);
   }
   updatePath(target) {
+    if (isRecyclePath(target.path)) return false;
     return Boolean(this.db.prepare("UPDATE memory SET path=?, name=? WHERE volume=? AND frn=? AND identity=? AND deleted=0 AND path<>?")
       .run(target.path, win32.basename(target.path), target.volume.toLowerCase(), target.id, target.identity, target.path).changes);
   }
@@ -44,7 +47,7 @@ class MotwMemory {
     const rows = this.db.prepare("SELECT * FROM memory WHERE " + matches.map(x=>x.where).join(" AND ") +
       " ORDER BY observed DESC,id LIMIT 40").all(...matches.flatMap(x=>x.args));
     return rows.map(row => ({
-      id: row.id, path: row.path, name: row.name, startedAt: row.observed,
+      id: row.id, ...historicalLocation(row), startedAt: row.observed,
       sourceStatus: "candidate", sourceTitle: row.referrer || row.host,
       domain: new URL(row.referrer || row.host).hostname,
       manager: "motw", canOpenSource: Boolean(safeHttpUrl(row.referrer) || safeHttpUrl(row.host)),
@@ -70,16 +73,19 @@ function createMotwCapture({ memory, resolve, read = readMotw, verify = verified
       if (row.reason & DELETE) {
         pending.delete(keyOf(volume, row.id));
         updated = memory.markDeleted(volume, row.id) || updated;
+      } else if (row.directory && isRecyclePath(win32.join(row.directory, row.name || ""))) {
+        pending.delete(keyOf(volume, row.id));
+        if (row.reason & RENAME_NEW) updated = true;
       } else if (row.reason & (CREATE | RENAME_NEW | STREAM)) queue(volume, row.id);
     }
     if (updated) changed();
   }
   async function capture(volume, id) {
     const before = await verify(await resolve(volume, id));
-    if (!before) return null;
+    if (!before || isRecyclePath(before.path)) return null;
     const evidence = await read(before.path);
     const after = await verify(await resolve(volume, id));
-    if (!after || before.identity !== after.identity || before.path !== after.path || closed) return null;
+    if (!after || isRecyclePath(after.path) || before.identity !== after.identity || before.path !== after.path || closed) return null;
     const updatedPath = memory.updatePath(after);
     const saved = evidence && memory.save(after, evidence);
     if (saved || updatedPath) changed();
