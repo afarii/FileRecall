@@ -22,7 +22,7 @@ export function recordStatus(record: SearchRecord) {
   }
   const { file } = record;
   return {
-    label: file.manager === "motw" ? "Windows 来源线索" : sourceLabels[file.sourceStatus],
+    label: file.manager === "motw" ? "来源匹配" : sourceLabels[file.sourceStatus],
     tone: file.manager === "motw" ? "warn" : file.canOpenSource ? "good" : file.sourceStatus === "candidate" ? "warn" : "",
   };
 }
@@ -63,6 +63,9 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
   const [deciding, setDeciding] = useState(false);
   const [sourceError, setSourceError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const [sourceFavorite, setSourceFavorite] = useState<boolean | null>(null);
+  const [confirmForget, setConfirmForget] = useState(false);
+  const motwId = record.type === "download" && record.file.manager === "motw" ? record.file.id : null;
 
   useEffect(() => {
     let active = true;
@@ -78,6 +81,30 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
     return () => { active = false; };
   }, [localFile?.path, localFile?.status, localFile?.currentPath, localFile?.modifiedAt, browserId]);
 
+  useEffect(() => {
+    let active = true;
+    setSourceFavorite(null);
+    setConfirmForget(false);
+    if (motwId) void window.fileRecall.sourceFileState(motwId).then(state => {
+      if (active) setSourceFavorite(state?.favorite ?? null);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [motwId, file.path, record.type === "download" ? record.file.pathStatus : null]);
+
+  async function sourceAction(action: "open" | "favorite" | "forget") {
+    if (!motwId) return;
+    setActionMessage("");
+    setDeciding(true);
+    try {
+      const ok = action === "open" ? await window.fileRecall.openSourceFile(motwId)
+        : action === "favorite" ? await window.fileRecall.favoriteSourceFile(motwId, !sourceFavorite)
+        : await window.fileRecall.forgetSource(motwId);
+      if (!ok) setActionMessage("操作未完成，请重新搜索。");
+      else if (action === "favorite") setSourceFavorite(!sourceFavorite);
+      else if (action === "forget") onClose();
+    } catch { setActionMessage("操作失败，请重试。"); }
+    finally { setDeciding(false); }
+  }
   async function decideSource(id: string, decision: SourceDecision) {
     if (!localFile || !provenance?.identity) return;
     setDeciding(true);
@@ -189,6 +216,10 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
             void api.revealLinkedDownload(record.file.id).then((ok) => { if (!ok) setActionMessage("文件位置已改变，请重新打开详情。"); })
               .catch(() => setActionMessage("无法定位关联文件。"));
           }}>定位现址</button>}
+          {motwId && linked?.status === "present" && <>
+            <button className="secondary" disabled={deciding} onClick={() => void sourceAction("open")}>打开文件</button>
+            {sourceFavorite !== null && <button className="secondary" disabled={deciding} onClick={() => void sourceAction("favorite")}>{sourceFavorite ? "★ 取消收藏" : "☆ 收藏文件"}</button>}
+          </>}
           {file.path && <button className="secondary" onClick={() => void fileAction("copy")}>复制记录路径</button>}
         </div>
       </section>
@@ -201,6 +232,11 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
             : record.file.manager === "aria2" ? "打开下载地址" : "打开来源页面"} ↗</button>}
         {record.file.manager === "motw" ? <p className="muted">来源来自 Windows 文件标记，可能被修改。打开前请核对网址。</p> : record.file.sourceStatus === "candidate" && <p className="muted">可在 Chrome 扩展中核对来源。</p>}
       </section>
+      {motwId && <section className="detail-section">
+        {confirmForget ? <><p className="muted">删除这条 Windows 来源记录，磁盘文件会保留；此文件身份不再自动采集。</p>
+          <div className="actions"><button disabled={deciding} onClick={() => void sourceAction("forget")}>确认删除来源</button><button className="secondary" onClick={() => setConfirmForget(false)}>取消</button></div></>
+          : <button className="secondary" onClick={() => setConfirmForget(true)}>删除来源记录</button>}
+      </section>}
     </>}
     {sourceError && <p className="error" role="alert">{sourceError}</p>}
     {actionMessage && <p className="muted" role="status">{actionMessage}</p>}
