@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("fileRecall", Object.freeze({
   addFolder: () => ipcRenderer.invoke("folders:add"),
   rescan: () => ipcRenderer.invoke("folders:rescan"),
   search: (query) => ipcRenderer.invoke("files:search", query),
+  smartSearch: (query, useModel) => ipcRenderer.invoke("files:smart-search", query, useModel),
   unifiedSearch: (query, favoritesOnly, deep = false) => ipcRenderer.invoke("files:search-unified", query, favoritesOnly, deep),
   favoriteNtfs: (drive, id, enabled) => ipcRenderer.invoke("ntfs:favorite", drive, id, enabled),
   textEnabled: () => ipcRenderer.invoke("files:text-enabled"),
