@@ -35,6 +35,7 @@ async function smartRecovery(raw, deps, { useModel=true, now=Date.now() }={}){
     records.set(key,{...record,evidence:[evidence,...(category?.label?[category.label]:[])]});
   };
   if(plan.category==="software")notes.push("安装包和可执行文件优先展示；压缩包作为可能的软件候选，未解包核验内容。");
+  if(plan.category==="courseware")notes.push("课件按演示文稿和 PDF 类型召回，结合文件名及所属目录判断主题。");
   let candidates=[];
   if(plan.recorded){
     let rows=await deps.sources(plan);
@@ -57,6 +58,13 @@ async function smartRecovery(raw, deps, { useModel=true, now=Date.now() }={}){
       const found=await deps.files(query,plan.favorites);
       if(found.length>=100)truncated=true;
       for(const record of found)if(fitsFile(record,plan))add(record,"文件名、索引或收藏匹配");
+    }
+    if(plan.category&&plan.topic&&deps.context){
+      try{
+        const contextual=await deps.context(plan);
+        if(contextual.length>=201)truncated=true;
+        for(const r of contextual)if(fitsFile(r,plan))add(r,"所属目录与主题匹配");
+      }catch{notes.push("目录上下文检索暂不可用，已保留其他匹配结果。");}
     }
   }
   if(plan.topic&&useModel){
