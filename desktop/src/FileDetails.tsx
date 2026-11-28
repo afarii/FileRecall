@@ -160,7 +160,7 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
         {!confirmed && provenance?.candidates.map((candidate) => <div className="source-candidate" key={candidate.id}>
           <strong>{candidate.name}</strong> <span className="badge warn">{candidate.evidence} · 待核对</span>
           <p>{candidate.path}</p>
-          <p className="muted">{[candidate.manager === "aria2" ? "Motrix／aria2" : "Chrome", candidate.domain, candidate.sourceTitle,
+          <p className="muted">{[candidate.manager === "aria2" ? "旧下载记录" : "Chrome", candidate.domain, candidate.sourceTitle,
             new Date(candidate.startedAt).toLocaleString()].filter(Boolean).join(" · ")}</p>
           <div className="actions">
             <button disabled={deciding} onClick={() => void decideSource(candidate.id, "confirmed")}>确认是同一文件</button>
