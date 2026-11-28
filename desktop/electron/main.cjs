@@ -349,6 +349,10 @@ app.whenReady().then(() => {
     if (!error) void ntfs.recordUse(current.drive,current.id).catch(() => {});
     return !error;
   });
+  ipcMain.handle("sources:file-state", async (_event, id) => {
+    const current = await liveMotw(id);
+    return current ? { favorite: current.favorite } : null;
+  });
   ipcMain.handle("sources:favorite", async (_event, id, enabled) => {
     if (typeof enabled !== "boolean") return false;
     const current = await liveMotw(id);
