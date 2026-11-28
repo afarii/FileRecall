@@ -32,7 +32,7 @@ interface BrowserDownload {
   sourceTitle: string;
   domain: string;
   canOpenSource: boolean;
-  pathStatus: "present" | "missing" | "unknown";
+  pathStatus: "present" | "missing" | "unknown" | "recycled";
 }
 
 type SourceRecord = Omit<BrowserDownload, "pathStatus">;
