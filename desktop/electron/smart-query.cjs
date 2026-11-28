@@ -3,7 +3,9 @@
 const aliases = { github:"github.com", gitlab:"gitlab.com", gitee:"gitee.com", 知乎:"zhihu.com", 哔哩哔哩:"bilibili.com", bilibili:"bilibili.com", 百度网盘:"pan.baidu.com", arxiv:"arxiv.org", huggingface:"huggingface.co" };
 const softwareTypes = ["exe","msi","msix","appx","msixbundle","appxbundle","zip","rar","7z"];
 const types = [
-  [/(?:安装包|安装程序|可执行文件|\bexe\b|\bmsi\b|\bmsix\b|\bappx\b)/ig,["exe","msi","msix","appx","msixbundle","appxbundle"]],
+  [/(?:安装包|安装程序)/g,["exe","msi","msix","appx","msixbundle","appxbundle"]],
+  [/(?:可执行文件|\bexe\b)/ig,["exe"]],
+  ...softwareTypes.slice(1,6).map(ext=>[new RegExp("\\b"+ext+"\\b","ig"),[ext]]),
   [/(?:\bpdf\b)/ig,["pdf"]],
   [/(?:\bpptx?\b|幻灯片|演示文稿)/ig,["ppt","pptx"]],
   [/(?:\bdocx?\b|\bword\b)/ig,["doc","docx"]],
