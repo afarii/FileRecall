@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, Notification, safeStorage, shell, Tray } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, Notification, shell, Tray } = require("electron");
 const { existsSync } = require("node:fs");
 const { lstat } = require("node:fs/promises");
 const { join } = require("node:path");
@@ -14,12 +14,17 @@ const { createHotkey } = require("./hotkey.cjs");
 const { semanticModel } = require("./semantic-model.cjs");
 const { createSemanticSearch } = require("./semantic-search.cjs");
 const { createProvenance } = require("./provenance.cjs");
-const { createAria2Connection } = require("./aria2-connection.cjs");
+const { NtfsSourceLinks, createNtfsProvenance, verifiedTarget } = require("./ntfs-provenance.cjs");
+const { MotwMemory } = require("./motw-memory.cjs");
+const { historicalLocation, resolveRememberedFile, isRecyclePath } = require("./recycle-path.cjs");
+const { restoreRememberedFile } = require("./recycle-restore.cjs");
+const { smartRecovery } = require("./smart-recovery.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { createNtfsService } = require("./ntfs-service.cjs");
 const { createSearchService } = require("./search-service.cjs");
 const { createPerformanceDiagnostics } = require("./performance-diagnostics.cjs");
-const { readMotw } = require("./motw.cjs");
+const { createShutdown } = require("./shutdown.cjs");
+const { safeHttpUrl } = require("./motw.cjs");
 const appIconDataURL = require("./app-icon.cjs");
 const appIcon = () => nativeImage?.createFromDataURL(appIconDataURL);
 
@@ -28,12 +33,11 @@ let index;
 let monitor;
 let hotkey;
 let semantic;
-let aria2;
 let updates;
 let ntfs;
 let searches;
 let diagnostics;
-let ntfsClosing;
+let shutdown;
 let lastTrackedDrives = "";
 let searchKeyTimer;
 let updateNotification;
@@ -54,6 +58,7 @@ function trackedDrives() {
 }
 
 function notifyChanged() {
+  if (closing) return;
   if (ntfs && index) {
     const drives = trackedDrives();
     const key = drives.join("");
@@ -66,6 +71,7 @@ function notifyChanged() {
 }
 
 function send(channel, payload) {
+  if (closing) return;
   if (window && !window.isDestroyed()) window.webContents.send(channel, payload);
 }
 
@@ -173,10 +179,12 @@ app.whenReady().then(() => {
       try {
         ntfs = createNtfsService(join(userData, "ntfs-index.sqlite"), userData, ntfsReader, {
           trackedDrives: trackedDrives(),
+          sourceRoots: [...new Set(["downloads", "documents", "desktop"].map(name => app.getPath(name)).filter(Boolean))],
           onChange: (state) => send("ntfs:changed", state),
           onPaths: (drive, paths) => monitor.applyJournal(drive, paths),
           onActiveDrives: (drives) => monitor.setJournalDrives(drives),
           onMetrics: (metrics) => diagnostics.setNtfsMetrics(metrics),
+          onSourcesChanged: () => send("downloads:changed"),
         });
         lastTrackedDrives = trackedDrives().join("");
       } catch (error) {
@@ -188,6 +196,7 @@ app.whenReady().then(() => {
     localDatabase: databasePath,
     ntfsDatabase: ntfs ? join(userData, "ntfs-index.sqlite") : null,
     downloadsDatabase: join(userData, "browser-downloads.sqlite"),
+    motwDatabase: join(userData, "motw-memory.sqlite"),
     applicationData: userData,
     onMetric: (kind, durationMs) => diagnostics.recordSearch(kind, durationMs),
   });
@@ -211,8 +220,7 @@ app.whenReady().then(() => {
   ipcMain.handle("ntfs:search-deep", (_event, query) => ntfs
     ? searches.searchNtfsDeep(query, ntfs.searchableDrives()) : []);
   ipcMain.handle("ntfs:motw", async (_event, drive, id) => {
-    const path = await ntfs?.target(drive, id);
-    return path ? readMotw(path) : null;
+    return await ntfs?.captureMotw(drive, id) ?? null;
   });
   ipcMain.handle("ntfs:reveal", async (_event, drive, id) => {
     const path = await ntfs?.target(drive, id);
@@ -273,16 +281,6 @@ app.whenReady().then(() => {
     return { files, indexed, truncated };
   });
   const downloadsPath = join(userData, "browser-downloads.sqlite");
-  aria2 = createAria2Connection(userData, safeStorage, (records) => {
-    if (!records.length) return 0;
-    const sources = new DownloadSources(downloadsPath);
-    try { return sources.importAria2(records); }
-    finally { sources.close(); }
-  }, () => send("downloads:changed"));
-  ipcMain.handle("aria2:status", () => aria2.status());
-  ipcMain.handle("aria2:connect", (_event, port, secret) => aria2.connect(port, secret));
-  ipcMain.handle("aria2:refresh", () => aria2.refresh());
-  ipcMain.handle("aria2:disconnect", () => aria2.disconnect());
   const connection = app.isPackaged && process.platform === "win32"
     ? chromeConnection(app.getPath("userData"), process.resourcesPath)
     : null;
@@ -301,11 +299,97 @@ app.whenReady().then(() => {
     }
   }
   const provenance = createProvenance(index, readDownloads);
+  // This tiny database is accessed only on source-detail actions, never on
+  // the filename keystroke hot path. Open and close each operation explicitly.
+  async function withNtfsProvenance(action) {
+    const links = new NtfsSourceLinks(join(userData, "ntfs-source-links.sqlite"));
+    try {
+      return await action(createNtfsProvenance({
+        links, target: (drive, id) => ntfs?.sourceTarget(drive, id),
+        resolve: (volume, id) => ntfs?.sourceTargetForVolume(volume, id),
+        readDownloads, legacyLinked: (id) => Boolean(index.linkedIdentity(id)),
+      }), links);
+    } finally { links.close(); }
+  }
+  ipcMain.handle("ntfs:provenance", (_event, drive, id) =>
+    withNtfsProvenance((service) => service.details(drive, id)));
+  ipcMain.handle("ntfs:decide-source", (_event, drive, id, identity, downloadId, decision) =>
+    monitor.run(() => withNtfsProvenance(async (service) => {
+      const result = await service.decide(drive, id, identity, downloadId, decision);
+      send("downloads:changed");
+      return result;
+    })));
+  const motwPath = join(userData, "motw-memory.sqlite");
+  function motwRecord(id) {
+    if (typeof id !== "string" || !/^motw:[a-f0-9]{64}$/.test(id) || !existsSync(motwPath)) return null;
+    const memory = new MotwMemory(motwPath, { readOnly: true });
+    try { return memory.byId(id) ?? null; } finally { memory.close(); }
+  }
+  ipcMain.handle("sources:status", () => ntfs?.sourceSettings() ?? { available:false, enabled:false,count:0 });
+  ipcMain.handle("sources:enabled", (_event, enabled) => ntfs?.setSourceEnabled(enabled));
+  ipcMain.handle("sources:clear", () => ntfs?.clearSources());
+  ipcMain.handle("sources:forget", (_event,id) => ntfs?.forgetSource(id) ?? false);
+  async function resolveMotw(row) {
+    return resolveRememberedFile(row, (volume, id) => ntfs?.sourceStateForVolume(volume, id), verifiedTarget);
+  }
+  async function linkedDownload(id) {
+    if (typeof id !== "string" || id.length > 160) return null;
+    if (id.startsWith("motw:")) return resolveMotw(motwRecord(id));
+    const linked = await withNtfsProvenance((service) => service.linkedFile(id));
+    return linked ?? index.linkedFile(id);
+  }
+  async function liveMotw(id) {
+    const row = motwRecord(id);
+    if (!row || row.deleted) return null;
+    const current = await verifiedTarget(await ntfs?.sourceTargetForVolume(row.volume, row.frn));
+    return current?.identity === row.identity && !isRecyclePath(current.path) ? current : null;
+  }
+  const restoring = new Set();
+  ipcMain.handle("sources:restore", async (_event, id) => {
+    if (closing || !ntfs || typeof id !== "string" || !/^motw:[a-f0-9]{64}$/.test(id) || restoring.has(id))
+      return { ok:false, message:"还原暂不可用或正在进行。" };
+    restoring.add(id);
+    try {
+      const result = await restoreRememberedFile(motwRecord(id), {
+        lookup: (volume, frn) => ntfs.sourceTargetForVolume(volume, frn), verify: verifiedTarget,
+      });
+      send("downloads:changed");
+      if (result.ok) notifyChanged();
+      return result;
+    } finally { restoring.delete(id); }
+  });
+  ipcMain.handle("sources:open-file", async (_event, id) => {
+    const current = await liveMotw(id);
+    if (!current) return false;
+    const error = await shell.openPath(current.path);
+    if (!error) void ntfs.recordUse(current.drive,current.id).catch(() => {});
+    return !error;
+  });
+  ipcMain.handle("sources:file-state", async (_event, id) => {
+    const current = await liveMotw(id);
+    return current ? { favorite: current.favorite } : null;
+  });
+  ipcMain.handle("sources:favorite", async (_event, id, enabled) => {
+    if (typeof enabled !== "boolean") return false;
+    const current = await liveMotw(id);
+    if (!current) return false;
+    const ok = await ntfs.favorite(current.drive,current.id,enabled);
+    if (ok) notifyChanged();
+    return ok;
+  });
+  ipcMain.handle("downloads:reveal-linked", async (_event, id) => {
+    const file = await linkedDownload(id);
+    if (file?.status !== "present") return false;
+    shell.showItemInFolder(file.path);
+    return true;
+  });
   ipcMain.handle("provenance:local", (_event, path) => provenance.local(path));
   ipcMain.handle("provenance:decide", (_event, path, identity, id, decision) => monitor.run(() =>
-    provenance.decide(path, identity, id, decision)));
-  ipcMain.handle("provenance:download", (_event, id) =>
-    typeof id === "string" && id.length <= 160 ? index.linkedFile(id) : null);
+    withNtfsProvenance((_service, links) => {
+      if (decision === "confirmed" && links.byDownload(id)) throw new Error("此下载已关联其他文件。");
+      return provenance.decide(path, identity, id, decision);
+    })));
+  ipcMain.handle("provenance:download", (_event, id) => linkedDownload(id));
   ipcMain.handle("files:annotate", (_event, path, expectedIdentity, input) => monitor.run(async () => {
     const identity = await index.sourceIdentity(path);
     if (!identity || identity !== expectedIdentity) throw new Error("文件状态已改变，请重新打开详情。");
@@ -313,17 +397,56 @@ app.whenReady().then(() => {
     notifyChanged();
     return result;
   }));
+  let smartRunning = false;
+  ipcMain.handle("files:smart-search", async (_event, query, useModel) => {
+    if(closing || smartRunning)throw new Error("已有智能找回任务正在运行，请稍后重试。");
+    smartRunning=true;
+    try{
+      return await smartRecovery(query,{
+        sources:plan=>searches.smartSources(plan),
+        files:(query,favorites)=>searches.smartFiles(query,ntfs?.searchableDrives()??[],favorites),
+        context:plan=>searches.smartContext(plan,ntfs?.searchableDrives()??[]),
+        resolveSource:async (row,favorites)=>{
+          if(row.manager==="motw"){
+            const saved=motwRecord(row.id);
+            if(!saved)return null;
+            const linked=await resolveMotw(saved);
+            const current=favorites&&linked?.status==="present"?await liveMotw(row.id):null;
+            return {...row,path:linked?.path??row.path,name:linked?.name??row.name,
+              pathStatus:linked?.recycled?"recycled":linked?.status??"unknown",favorite:Boolean(current?.favorite)};
+          }
+          // A browser path alone is not evidence that the original download
+          // still exists. Keep its historical record, but do not assert deletion.
+          return {...row,pathStatus:"unknown",favorite:false};
+        },
+        modelReady:async()=>!closing&&index?.textEnabled()&&(await model.status()).ready,
+        semantic:async(topic,options)=>{
+          if(closing||!index?.textEnabled())throw new Error("正文索引不可用。");
+          const result=await semantic.search(topic,options);
+          const files=result.matches.map(match=>index?.semanticMatch(match)).filter(Boolean);
+          return {...result,files};
+        },
+      },{useModel:useModel===true});
+    }finally{smartRunning=false;}
+  });
   ipcMain.handle("downloads:search", async (_event, query, manager) => {
     // Live typing needs a small, cheap first page; each path status check is disk I/O.
     const rows = await searches.searchDownloads(query);
     const scoped = manager === "chrome" || manager === "aria2"
       ? rows.filter((row) => row.manager === manager) : rows;
-    return Promise.all(scoped.map(async (row) => ({
-      ...row, pathStatus: await downloadPathStatus(row.path),
-    })));
+    return Promise.all(scoped.map(async (row) => {
+      if (row.manager === "motw") {
+        const linked = await resolveMotw(motwRecord(row.id));
+        return { ...row, path: linked?.path ?? row.path, name: linked?.name ?? row.name,
+          pathStatus: linked?.recycled ? "recycled" : linked?.status ?? "unknown" };
+      }
+      return { ...row, pathStatus: await downloadPathStatus(row.path) };
+    }));
   });
   ipcMain.handle("downloads:open-source", async (_event, id) => {
-    const url = readDownloads((sources) => sources.sourceToOpen(id), null);
+    const memory = typeof id === "string" && id.startsWith("motw:") ? motwRecord(id) : null;
+    const url = memory ? safeHttpUrl(memory.referrer) || safeHttpUrl(memory.host)
+      : readDownloads((sources) => sources.sourceToOpen(id), null);
     if (!url) return false;
     await shell.openExternal(url);
     return true;
@@ -409,7 +532,7 @@ app.whenReady().then(() => {
   ipcMain.handle("files:copy-path", async (_event, kind, key) => {
     if (typeof key !== "string") return false;
     const path = kind === "local" ? (await fileTarget(key) ?? index.get(key)?.path)
-      : kind === "download" && key.length <= 160 ? readDownloads((sources) => sources.byId(key)?.path, null) : null;
+      : kind === "download" && key.length <= 160 ? (key.startsWith("motw:") ? (motwRecord(key) ? historicalLocation(motwRecord(key)).path : null) : readDownloads((sources) => sources.byId(key)?.path, null)) : null;
     if (!path) return false;
     clipboard.writeText(path);
     return true;
@@ -449,30 +572,40 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  if (!closing) {
-    stopEvery(searchKeyTimer);
-    hotkey?.close();
-    semantic?.clear();
-    aria2?.close();
-    updates?.close();
-    updateNotification?.close();
-    ntfsClosing = ntfs?.close();
-  }
-  if (monitor && !quitReady) {
-    event.preventDefault();
-    if (closing) return;
-    closing = true;
-    Promise.allSettled([monitor.close(), ntfsClosing, searches?.close(), diagnostics?.close()]).then(() => {
+  if (quitReady) return;
+  event.preventDefault();
+  if (closing) return;
+  closing = true;
+  // Closing via the tray is a real exit, not a request to hide the window.
+  // Destroy the renderer before stopping IPC services so it cannot issue
+  // more searches or show spurious search errors during cleanup.
+  stopEvery(searchKeyTimer);
+  try { tray?.destroy(); } catch {}
+  tray = undefined;
+  try { if (window && !window.isDestroyed()) window.destroy(); } catch {}
+  shutdown = createShutdown({
+    tasks: [
+      () => hotkey?.close(),
+      () => semantic?.clear(),
+      () => updates?.close(),
+      () => updateNotification?.close(),
+      () => monitor?.close(),
+      () => ntfs?.close(),
+      () => searches?.close(),
+      () => diagnostics?.close(),
+    ],
+    finalize: () => {
       index?.close();
       index = undefined;
       quitReady = true;
       app.quit();
-    });
-    return;
-  }
-  closing = true;
-  tray?.destroy();
-  tray = undefined;
-  index?.close();
-  index = undefined;
+    },
+    forceExit: () => {
+      // Normal cleanup has already been requested. SQLite committed WAL
+      // transactions remain recoverable; do not close a busy database here.
+      console.warn("FileRecall shutdown exceeded its cleanup deadline or failed.");
+      app.exit(0);
+    },
+  });
+  shutdown.start();
 });

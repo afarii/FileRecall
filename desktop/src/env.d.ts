@@ -28,11 +28,11 @@ interface BrowserDownload {
   name: string;
   startedAt: number;
   sourceStatus: "matched" | "confirmed" | "manual" | "candidate" | "unknown" | "rejected" | "direct";
-  manager: "chrome" | "aria2";
+  manager: "chrome" | "aria2" | "motw";
   sourceTitle: string;
   domain: string;
   canOpenSource: boolean;
-  pathStatus: "present" | "missing" | "unknown";
+  pathStatus: "present" | "missing" | "unknown" | "recycled";
 }
 
 type SourceRecord = Omit<BrowserDownload, "pathStatus">;
@@ -82,16 +82,7 @@ interface SemanticResult {
   truncated: boolean;
 }
 
-interface Aria2Status {
-  connected: boolean;
-  port: number;
-  hasSecret: boolean;
-}
 
-interface Aria2Sync {
-  found: number;
-  changed: number;
-}
 
 interface DesktopUpdateStatus {
   currentVersion: string;
@@ -118,6 +109,14 @@ interface NtfsResult {
   cached?: boolean;
 }
 
+interface SourceMemorySettings { available: boolean; enabled: boolean; count: number; }
+
+type SmartRecord = ({type:"local";file:FileRecord}|{type:"ntfs";file:NtfsResult}|{type:"download";file:BrowserDownload}) & {evidence:string[]};
+interface SmartResult {
+  plan: { topic:string;category?:string;domain:string;extensions:string[];range:{from:number;until:number;label:string}|null;status:string;favorites:boolean;recorded:boolean };
+  records:SmartRecord[];notes:string[];semanticIndexed:number;semanticUsed:boolean;truncated:boolean;
+}
+
 interface Window {
   fileRecall: {
     folders(): Promise<IndexedFolder[]>;
@@ -128,13 +127,10 @@ interface Window {
     addFolder(): Promise<ScanResult | null>;
     rescan(): Promise<ScanResult[]>;
     search(query: string): Promise<FileRecord[]>;
+    smartSearch(query: string, useModel: boolean): Promise<SmartResult>;
     textEnabled(): Promise<boolean>;
     setTextEnabled(enabled: boolean): Promise<void>;
     downloads(query: string, manager?: BrowserDownload["manager"]): Promise<BrowserDownload[]>;
-    aria2Status(): Promise<Aria2Status>;
-    connectAria2(port: number, secret: string): Promise<Aria2Sync>;
-    refreshAria2(): Promise<Aria2Sync>;
-    disconnectAria2(): Promise<void>;
     onDownloadsChanged(callback: () => void): () => void;
     chromeStatus(): Promise<{ available: boolean; extensionId: string | null }>;
     connectChrome(extensionId: string): Promise<string | null>;
@@ -142,6 +138,14 @@ interface Window {
     openLinkedSource(path: string, id: string): Promise<boolean>;
     provenance(path: string): Promise<FileProvenance>;
     decideSource(path: string, identity: string, id: string, decision: SourceDecision): Promise<FileProvenance>;
+    sourceSettings(): Promise<SourceMemorySettings>;
+    setSourceEnabled(enabled: boolean): Promise<SourceMemorySettings>;
+    clearSources(): Promise<SourceMemorySettings>;
+    forgetSource(id: string): Promise<boolean>;
+    openSourceFile(id: string): Promise<boolean>;
+    restoreSourceFile(id: string): Promise<{ ok: boolean; message?: string }>;
+    sourceFileState(id: string): Promise<{ favorite: boolean } | null>;
+    favoriteSourceFile(id: string, enabled: boolean): Promise<boolean>;
     linkedFile(id: string): Promise<Pick<FileRecord, "path" | "name" | "status"> | null>;
     annotate(path: string, identity: string, input: FileAnnotation): Promise<FileAnnotation>;
     openFile(path: string): Promise<{ ok: boolean; message?: string }>;

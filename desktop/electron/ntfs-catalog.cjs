@@ -4,6 +4,7 @@ const { DatabaseSync } = require("node:sqlite");
 const { win32 } = require("node:path");
 const { nameSearchKeys, queryTerms, termGroups, termCondition } = require("./filename-search.cjs");
 const { prepareQuery, scoreFile, compareFiles } = require("./search-relevance.cjs");
+const { isRecyclePath } = require("./recycle-path.cjs");
 
 const DIRECTORY = 0x10;
 const DELETE = 0x200;
@@ -173,6 +174,30 @@ class NtfsCatalog {
       id = item.parent;
     }
     return win32.join(drive + ":\\", ...names.reverse());
+  }
+
+  // Keyset walk of only the requested user folder. One indexed parent or
+  // file lookup per step; no MFT/whole-drive ADS scan or OFFSET traversal.
+  sourceBackfillStep(drive, root, cursor = {}) {
+    const base = win32.normalize(root).toLowerCase().replace(/\\$/, "");
+    if (!base || isRecyclePath(base)) return { done: true };
+    let { parent, folder = "", parentId = "", file = "" } = cursor;
+    if (!parent) {
+      const next = this.db.prepare(
+        "SELECT id,folded FROM ntfs_parent INDEXED BY ntfs_parent_path WHERE drive=? AND folded>=? AND folded<? AND (folded=? OR folded>=?) AND (folded>? OR (folded=? AND id>?)) ORDER BY folded,id LIMIT 1"
+      ).get(drive, base, base + "\\\uffff", base, base + "\\", folder, folder, parentId);
+      if (!next) return { done: true };
+      parent = next.id; folder = next.folded; parentId = next.id; file = "";
+    }
+    const next = this.db.prepare(
+      "SELECT id FROM ntfs_item INDEXED BY ntfs_item_parent WHERE drive=? AND parent=? AND id>? AND directory=0 ORDER BY id LIMIT 1"
+    ).get(drive, parent, file);
+    return next ? { id: next.id, cursor: { parent, folder, parentId, file: next.id } }
+      : { cursor: { folder, parentId } };
+  }
+
+  hasItem(drive, id) {
+    return Boolean(this.db.prepare("SELECT 1 FROM ntfs_item WHERE drive=? AND id=?").get(drive, id));
   }
 
   item(drive, id) {
@@ -360,6 +385,29 @@ class NtfsCatalog {
       row.directory ??= this.resolveParent(drive, row.parent);
       const path = fullPath(row)?.toLowerCase();
       return path && path !== this.applicationData && !below(path, this.applicationData);
+    });
+  }
+
+  // Explicit smart search only. Scan materialized directory names once,
+  // then use the indexed parent->file join. No filesystem or content I/O.
+  smartContext(drive, plan) {
+    const terms=String(plan.topic||"").toLowerCase().trim().split(/\s+/).filter(Boolean).slice(0,12);
+    const extensions=plan.extensions||[];
+    if(!terms.length||!extensions.length)return [];
+    const parentWhere=terms.map(()=> "instr(folded, ?) > 0").join(" AND ");
+    const extWhere=extensions.map(()=> "i.folded LIKE ?").join(" OR ");
+    const rows=this.db.prepare(
+      "WITH parents AS MATERIALIZED (SELECT id,path FROM ntfs_parent INDEXED BY ntfs_parent_path WHERE drive=? AND "+
+      parentWhere+" AND instr(folded, char(92)||'$recycle.bin'||char(92))=0 ORDER BY folded,id LIMIT 128) "+
+      "SELECT i.id,i.name,p.path AS directory,i.directory AS isDirectory,coalesce(u.favorite,0) AS favorite,"+
+      "coalesce(u.use_count,0) AS useCount,coalesce(u.last_used_at,0) AS lastUsedAt "+
+      "FROM parents p CROSS JOIN ntfs_item i INDEXED BY ntfs_item_parent ON i.drive=? AND i.parent=p.id "+
+      "LEFT JOIN ntfs_usage u ON u.drive=i.drive AND u.id=i.id "+
+      "WHERE i.directory=0 AND ("+extWhere+")"+(plan.favorites?" AND u.favorite=1":"")+" LIMIT 201"
+    ).all(drive,...terms,drive,...extensions.map(ext=>"%."+ext));
+    return rows.filter(row=>{
+      const path=fullPath(row)?.toLowerCase();
+      return path && !isRecyclePath(path) && path!==this.applicationData && !below(path,this.applicationData);
     });
   }
 

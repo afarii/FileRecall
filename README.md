@@ -4,7 +4,7 @@ Every download remembers where it came from.
 
 FileRecall is a local-first browser extension that records the source, context, and history of downloaded files.
 
-[v0.4 中文使用手册](desktop/USER-GUIDE.md) covers Windows, local AI search, Chrome, and Motrix／aria2.
+[v0.4 中文使用手册](desktop/USER-GUIDE.md) covers Windows, local AI search, Chrome and automatic source memory.
 
 The [v0.4.5 engineering and acceptance record](docs/file-recall-v0.4.5-engineering.md) documents release scope, architecture, synthetic benchmarks, privacy safeguards, and pending Windows checks.
 

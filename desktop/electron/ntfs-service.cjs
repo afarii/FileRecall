@@ -2,9 +2,9 @@
 const { Worker } = require("node:worker_threads");
 const { join } = require("node:path");
 
-function createNtfsService(database, userData, executable, { onChange, onPaths, onActiveDrives, onMetrics = () => {}, trackedDrives }) {
+function createNtfsService(database, userData, executable, { onChange, onPaths, onActiveDrives, onMetrics = () => {}, onSourcesChanged = () => {}, trackedDrives, sourceRoots = [] }) {
   const worker = new Worker(join(__dirname, "ntfs-worker.cjs"), {
-    workerData: { database, userData, executable, trackedDrives },
+    workerData: { database, userData, executable, trackedDrives, sourceRoots },
   });
   worker.unref();
   let state = { available: true, autoPhase: "idle", connected: false, drives: [] };
@@ -36,6 +36,8 @@ function createNtfsService(database, userData, executable, { onChange, onPaths, 
       onChange(state);
     } else if (msg.type === "active") {
       onActiveDrives(msg.drives);
+    } else if (msg.type === "sources") {
+      onSourcesChanged();
     } else if (msg.type === "metrics") {
       onMetrics(msg.data);
     } else if (msg.type === "paths") {
@@ -83,6 +85,14 @@ function createNtfsService(database, userData, executable, { onChange, onPaths, 
     enable: (drive) => invoke("enable", drive),
     disable: (drive) => invoke("disable", drive),
     target: (drive, id) => invoke("target", drive, id),
+    sourceTarget: (drive, id) => invoke("sourceTarget", drive, id),
+    captureMotw: (drive, id) => invoke("captureMotw", drive, id),
+    sourceSettings: () => invoke("sourceSettings"),
+    setSourceEnabled: (enabled) => invoke("setSourceEnabled", enabled),
+    forgetSource: (id) => invoke("forgetSource", id),
+    clearSources: () => invoke("clearSources"),
+    sourceTargetForVolume: (volume, id) => invoke("sourceTargetForVolume", volume, id),
+    sourceStateForVolume: (volume, id) => invoke("sourceStateForVolume", volume, id),
     recordUse: (drive, id) => invoke("recordUse", drive, id),
     favorite: (drive, id, enabled) => invoke("favorite", drive, id, enabled),
     setTrackedDrives: (drives) => invoke("trackedDrives", drives),

@@ -61,4 +61,4 @@ async function readMotw(path, { platform = process.platform, stat = lstat, openF
   }
 }
 
-module.exports = { parseMotw, readMotw };
+module.exports = { parseMotw, readMotw, safeHttpUrl };

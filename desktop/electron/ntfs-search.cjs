@@ -18,7 +18,7 @@ function validateVolume(info) {
 }
 
 class NtfsSearch {
-  constructor(database, userData, executable, { onChange, onPaths, onActiveDrives,
+  constructor(database, userData, executable, { onChange, onPaths, onActiveDrives, onSourceRows = () => {},
     createReader = startNtfsReader, discoverDrives = discoverFixedNtfsDrives, trackedDrives }) {
     this.catalog = new NtfsCatalog(database, userData);
     this.executable = executable;
@@ -28,6 +28,7 @@ class NtfsSearch {
     this.autoMessage = "";
     this.onChange = onChange;
     this.onPaths = onPaths;
+    this.onSourceRows = onSourceRows;
     this.onActiveDrives = onActiveDrives;
     this.trackedDrives = Array.isArray(trackedDrives) ? new Set(trackedDrives) : null;
     this.sessions = new Map();
@@ -307,6 +308,7 @@ class NtfsSearch {
         const slice = batch.rows.slice(offset, offset + 192);
         const isLast = offset + slice.length === batch.rows.length;
         catalogChanged = this.catalog.apply(drive, slice, false, info.journal, isLast ? batch.next : undefined) || catalogChanged;
+        try { this.onSourceRows(info.volume, slice); } catch { /* Source capture must not interrupt filename indexing. */ }
         await new Promise((resolve) => setTimeout(resolve, 4));
       }
       if (!batch.rows.length) this.catalog.checkpoint(drive, info.journal, batch.next);
@@ -353,6 +355,32 @@ class NtfsSearch {
     if (typeof id !== "string" || !/^\d{1,20}$/.test(id) || this.reader?.closed !== false ||
         !["ready", "building"].includes(this.sessions.get(drive)?.phase)) return null;
     return fullPath(this.catalog.item(drive, id)) ?? null;
+  }
+
+  sourceTarget(value, id) {
+    const drive = driveLetter(value);
+    if (this.sessions.get(drive)?.phase !== "ready") return null;
+    const volume = this.catalog.activeDrives().find((entry) => entry.drive === drive)?.volume;
+    const path = this.target(drive, id);
+    return volume && path ? { drive, volume: volume.toLowerCase(), id, path, favorite: Boolean(this.catalog.db.prepare("SELECT favorite FROM ntfs_usage WHERE drive=? AND id=?").get(drive,id)?.favorite) } : null;
+  }
+
+  sourceTargetForVolume(volume, id) {
+    if (typeof volume !== "string") return null;
+    const state = this.catalog.activeDrives().find((entry) =>
+      entry.volume.toLowerCase() === volume.toLowerCase() && this.sessions.get(entry.drive)?.phase === "ready");
+    return state ? this.sourceTarget(state.drive, id) : null;
+  }
+
+  sourceStateForVolume(volume, id) {
+    if (typeof volume !== "string" || typeof id !== "string" || !/^\d{1,20}$/.test(id) ||
+        this.reader?.closed !== false) return { state: "unknown" };
+    const entry = this.catalog.activeDrives().find((row) =>
+      row.volume.toLowerCase() === volume.toLowerCase() && this.sessions.get(row.drive)?.phase === "ready");
+    if (!entry) return { state: "unknown" };
+    const target = this.sourceTarget(entry.drive, id);
+    if (target) return { state: "present", target };
+    return { state: this.catalog.hasItem(entry.drive, id) ? "unknown" : "missing" };
   }
 
   async close() {

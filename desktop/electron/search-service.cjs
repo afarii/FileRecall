@@ -3,10 +3,10 @@
 const { Worker } = require("node:worker_threads");
 const { join } = require("node:path");
 
-function createSearchService({ localDatabase, ntfsDatabase, downloadsDatabase, applicationData, onMetric = () => {} }) {
+function createSearchService({ localDatabase, ntfsDatabase, downloadsDatabase, motwDatabase, applicationData, onMetric = () => {} }) {
   const createChannel = (searchKind) => {
     const worker = new Worker(join(__dirname, "search-worker.cjs"), {
-      workerData: { localDatabase, ntfsDatabase, downloadsDatabase, applicationData },
+      workerData: { localDatabase, ntfsDatabase, downloadsDatabase, motwDatabase, applicationData },
     });
     worker.unref();
     const pending = new Map();
@@ -106,12 +106,16 @@ function createSearchService({ localDatabase, ntfsDatabase, downloadsDatabase, a
   const ntfs = createChannel("ntfs");
   let deep;
   let downloads;
+  let smart;
   return {
     searchLocal: (query) => local.request(query),
     searchDownloads: (query) => {
       downloads ??= createChannel("downloads");
       return downloads.request(query, [], "downloads");
     },
+    smartSources: plan => { smart ??= createChannel("smart"); return smart.request(plan, [], "smart-sources"); },
+    smartContext: (plan, drives) => { smart ??= createChannel("smart"); return smart.request(plan, drives, "smart-context"); },
+    smartFiles: (query, drives, favoritesOnly = false) => { smart ??= createChannel("smart"); return smart.request(query, drives, "unified-deep", favoritesOnly); },
     searchUnified: (query, drives, favoritesOnly = false) => ntfs.request(query, drives, "unified", favoritesOnly),
     searchUnifiedDeep: (query, drives, favoritesOnly = false) => {
       deep ??= createChannel("ntfs-deep");
@@ -126,7 +130,7 @@ function createSearchService({ localDatabase, ntfsDatabase, downloadsDatabase, a
     },
     async close() {
       await Promise.all([local.close(), ntfs.close(), ...(deep ? [deep.close()] : []),
-        ...(downloads ? [downloads.close()] : [])]);
+        ...(downloads ? [downloads.close()] : []), ...(smart ? [smart.close()] : [])]);
     },
   };
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChromeConnection from "./ChromeConnection";
-import Aria2Connection from "./Aria2Connection";
 import HotkeySettings from "./HotkeySettings";
+import SourceMemorySettings from "./SourceMemorySettings";
 import DesktopUpdates from "./DesktopUpdates";
 import NtfsQuickResults from "./NtfsQuickResults";
 import NtfsDetails from "./NtfsDetails";
@@ -9,7 +9,7 @@ import PerformanceDiagnostics from "./PerformanceDiagnostics";
 import useSemanticSearch from "./useSemanticSearch";
 import FileDetails, { FileTile, recordKey, recordStatus, type SearchRecord } from "./FileDetails";
 import logo from "../../filerecall.svg";
-import { searchDisplay, preservePreviousResults, canActivateSearchResult, type SearchPhase } from "./search-state";
+import { searchDisplay, preservePreviousResults, canActivateSearchResult, fastSearchSnapshot, type SearchPhase } from "./search-state";
 
 type UnifiedRecord = SearchRecord | { type: "ntfs"; file: NtfsResult };
 type LocalRanking = FileRecord & { useCount?: number; lastUsedAt?: number; matchRank?: number };
@@ -79,7 +79,28 @@ export default function App() {
     const timer = window.setTimeout(() => setSearchQuery(query), query.trim() ? 25 : 0);
     return () => window.clearTimeout(timer);
   }, [query]);
-  const [mode, setMode] = useState<"literal" | "semantic">("literal");
+  const [mode, setMode] = useState<"literal" | "semantic" | "smart">("literal");
+  const [smartModel, setSmartModel] = useState(true);
+  const [smartBusy, setSmartBusy] = useState(false);
+  const smartLock = useRef(false);
+  const [smartResponse, setSmartResponse] = useState<{query:string;result?:SmartResult;error?:string}>();
+  async function runSmart() {
+    const text = query.trim();
+    if(!text || smartLock.current) return;
+    smartLock.current=true;
+    setSmartBusy(true);
+    setSelected(null);
+    setSmartResponse(undefined);
+    try {
+      const result=await window.fileRecall.smartSearch(text,smartModel);
+      setSmartResponse({query:text,result});
+    } catch(err) {
+      setSmartResponse({query:text,error:err instanceof Error?err.message:"智能找回失败，请重试。"});
+    } finally {
+      smartLock.current=false;
+      setSmartBusy(false);
+    }
+  }
   const searchInput = useRef<HTMLInputElement | null>(null);
   const resultPane = useRef<HTMLElement | null>(null);
   const semantic = useSemanticSearch();
@@ -88,15 +109,24 @@ export default function App() {
   const currentFavorite = useRef(filter === "favorites");
   currentFavorite.current = filter === "favorites";
   const reloadVersion = useRef(0);
+  const activeReload = useRef<{ query: string; favorite: boolean; dirty: boolean; promise?: Promise<void> } | null>(null);
   const [busy, setBusy] = useState(false);
   const [textEnabled, setTextEnabled] = useState<boolean>();
   const [changingText, setChangingText] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
-  const reload = useCallback(async (search: string) => {
-    const version = ++reloadVersion.current;
+  const reload = useCallback(async function refresh(search: string): Promise<void> {
     const favorite = currentFavorite.current;
+    const active = activeReload.current;
+    if (active?.query === search && active.favorite === favorite) {
+      active.dirty = true;
+      return active.promise;
+    }
+    const job: { query: string; favorite: boolean; dirty: boolean; promise?: Promise<void> } =
+      { query: search, favorite, dirty: false };
+    activeReload.current = job;
+    const version = ++reloadVersion.current;
     const isCurrent = () => version === reloadVersion.current &&
       search === currentQuery.current && favorite === currentFavorite.current;
     const api = window.fileRecall as typeof window.fileRecall & {
@@ -106,29 +136,38 @@ export default function App() {
       query: search, favorites: favorite, phase: "searching",
       files: previous?.query === search && previous.favorites === favorite ? previous.files : [],
     }));
-    let files: UnifiedRecord[] = [];
-    try {
-      files = await api.unifiedSearch(search, favorite);
-      if (!isCurrent()) return;
-      const supplement = search.trim().length >= 2 && files.length < 40;
-      setUnifiedResult({ query: search, favorites: favorite, files, phase: supplement ? "supplementing" : "complete" });
-      if (!supplement) return;
-      // The pending state includes the debounce before the background query.
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
-      if (!isCurrent()) return;
-      const more = await api.unifiedSearch(search, favorite, true);
-      if (!isCurrent()) return;
-      const merged = new Map(files.map((record) => [unifiedKey(record), record]));
-      for (const record of more) if (!merged.has(unifiedKey(record))) merged.set(unifiedKey(record), record);
-      setUnifiedResult({ query: search, favorites: favorite, files: [...merged.values()], phase: "complete" });
-    } catch {
-      if (!isCurrent()) return;
-      setUnifiedResult((previous) => ({
-        query: search, favorites: favorite,
-        files: previous?.query === search && previous.favorites === favorite ? previous.files : files,
-        phase: "failed", error: "文件检索未能完成，请重新搜索。",
-      }));
-    }
+    job.promise = (async () => {
+      let files: UnifiedRecord[] = [];
+      try {
+        files = await api.unifiedSearch(search, favorite);
+        if (!isCurrent()) return;
+        const supplement = search.trim().length >= 2 && files.length < 40;
+        setUnifiedResult(previous => fastSearchSnapshot(previous, search, favorite, files, supplement));
+        if (!supplement) return;
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+        if (!isCurrent()) return;
+        const more = await api.unifiedSearch(search, favorite, true);
+        if (!isCurrent()) return;
+        const merged = new Map(files.map((record) => [unifiedKey(record), record]));
+        for (const record of more) merged.set(unifiedKey(record), record);
+        setUnifiedResult({ query: search, favorites: favorite, files: [...merged.values()], phase: "complete" });
+      } catch {
+        if (!isCurrent()) return;
+        setUnifiedResult((previous) => ({
+          query: search, favorites: favorite,
+          files: previous?.query === search && previous.favorites === favorite ? previous.files : files,
+          phase: "failed", error: "文件检索未能完成，请重新搜索。",
+        }));
+      } finally {
+        if (activeReload.current === job) {
+          activeReload.current = null;
+          // An index event during a search requests one follow-up, rather than
+          // repeatedly cancelling the in-flight deep query.
+          if (job.dirty && isCurrent()) void refresh(search);
+        }
+      }
+    })();
+    return job.promise;
   }, []);
   const refreshFolders = useCallback(async () => {
     const [nextFolders, nextHistoryFolders] = await Promise.all([
@@ -198,7 +237,7 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    if (mode === "semantic" || filter === "favorites" || !searchQuery.trim()) return;
+    if (mode !== "literal" || filter === "favorites" || !searchQuery.trim()) return;
     setBrowserResult((previous) => ({ query: searchQuery, manager: downloadManager, pending: true,
       files: previous?.query === searchQuery && previous.manager === downloadManager ? previous.files : [] }));
     const timer = window.setTimeout(() => {
@@ -333,18 +372,27 @@ export default function App() {
     unifiedResult.favorites === (filter === "favorites") ? unifiedResult : undefined;
   const browser = !inputPending && browserResult?.query === searchQuery && browserResult.manager === downloadManager ? browserResult : undefined;
   const semanticMode = mode === "semantic";
+  const smartMode = mode === "smart";
+  const specialMode = semanticMode || smartMode;
+  const smartResult = smartMode && smartResponse && smartResponse.query === query.trim() ? smartResponse.result : undefined;
+  const smartError = smartMode && smartResponse && smartResponse.query === query.trim() ? smartResponse.error : undefined;
   const semanticResult = semantic.result?.query === query ? semantic.result.result : undefined;
   const localOnly = filter === "favorites";
-  const downloadRecords: SearchRecord[] = useMemo(() => (semanticMode || localOnly ||
+  const downloadRecords: SearchRecord[] = useMemo(() => (specialMode || localOnly ||
     (!searchQuery.trim() && filter === "all") ? [] : (browser?.files ?? []))
-    .map((file): SearchRecord => ({ type: "download", file })), [browser, semanticMode, localOnly, filter, searchQuery]);
+    .map((file): SearchRecord => ({ type: "download", file })), [browser, specialMode, localOnly, filter, searchQuery]);
   const { currentRecords, historyRecords } = useMemo(() => {
-    const filenameRecords: UnifiedRecord[] = semanticMode
+    const filenameRecords: UnifiedRecord[] = smartMode ? (smartResult?.records ?? []) : semanticMode
       ? (semanticResult?.files ?? []).map((file): UnifiedRecord => ({ type: "local", file }))
       : (matched?.files ?? []);
     // Download events are separate historical evidence. A reused pathname
     // does not prove the current file is the one originally downloaded.
-    const downloads = downloadRecords;
+    // MOTW observations can identify a current file; keep it in current results.
+    // A duplicate current filename row already exposes its MOTW details.
+    const filenames = new Set(filenameRecords.filter((record) => record.type === "ntfs" || (record.type === "local" && record.file.status === "present"))
+      .map((record) => record.file.path.toLowerCase()));
+    const downloads = downloadRecords.filter((record) => record.type !== "download" || record.file.manager !== "motw" ||
+      record.file.pathStatus !== "present" || !filenames.has(record.file.path.toLowerCase()));
     const current: UnifiedRecord[] = [];
     const history: UnifiedRecord[] = [];
     for (const record of [...filenameRecords, ...downloads]) {
@@ -352,14 +400,16 @@ export default function App() {
       // identity comes from the file index. Keep provenance-only rows together.
       const historical = record.type === "local"
         ? record.file.status === "missing" && !record.file.currentPath
-        : record.type === "download";
+        : record.type === "download" && (record.file.manager !== "motw" || record.file.pathStatus !== "present");
       (historical ? history : current).push(record);
     }
-    if (!semanticMode) {
+    if (!specialMode) {
       const compare = (a: UnifiedRecord, b: UnifiedRecord) => {
         const left = a.file as LocalRanking;
         const right = b.file as LocalRanking;
-        return relevance(b, searchQuery) - relevance(a, searchQuery) ||
+        const domainMatch = (record: UnifiedRecord) => record.type === "download" && record.file.domain &&
+          searchQuery.trim().toLowerCase().split(/\s+/).includes(record.file.domain.toLowerCase()) ? 1 : 0;
+        return domainMatch(b) - domainMatch(a) || relevance(b, searchQuery) - relevance(a, searchQuery) ||
           Number(Boolean(right.favorite)) - Number(Boolean(left.favorite)) ||
           (right.useCount ?? 0) - (left.useCount ?? 0) ||
           (right.lastUsedAt ?? 0) - (left.lastUsedAt ?? 0) ||
@@ -370,33 +420,35 @@ export default function App() {
       history.sort(compare);
     }
     return { currentRecords: current, historyRecords: history };
-  }, [semanticMode, semanticResult, matched, downloadRecords, searchQuery]);
-  const historyVisible = showHistory || currentRecords.length === 0;
+  }, [specialMode, smartMode, smartResult, semanticMode, semanticResult, matched, downloadRecords, searchQuery]);
+  const exactSource = (record: UnifiedRecord) => record.type === "download" && Boolean(record.file.domain) &&
+    searchQuery.trim().toLowerCase().split(/\s+/).includes(record.file.domain.toLowerCase());
+  const historyVisible = smartMode || showHistory || currentRecords.length === 0 || historyRecords.some(exactSource);
   const allRecords = useMemo(() => [...currentRecords, ...historyRecords], [currentRecords, historyRecords]);
   const selectedRecord = allRecords.find((record) => unifiedKey(record) === selected);
   const hasResults = allRecords.length > 0;
   // The fast filename results render before the slower download/history enrichment completes.
-  const searchingHistory = !semanticMode && !localOnly && Boolean(searchQuery.trim()) && (!browser || Boolean(browser.pending));
+  const searchingHistory = !specialMode && !localOnly && Boolean(searchQuery.trim()) && (!browser || Boolean(browser.pending));
   const display = searchDisplay({ inputPending, filePhase: matched?.phase, historyPending: searchingHistory,
     historyFailed: !localOnly && Boolean(browser?.error), hasResults });
-  const showingPrevious = !semanticMode && preservePreviousResults({
+  const showingPrevious = !specialMode && preservePreviousResults({
     display, query, favorites: localOnly, previousFavorites: previousResults?.favorites,
     previousCount: (previousResults?.current.length ?? 0) + (previousResults?.history.length ?? 0),
   });
   const visibleCurrent = showingPrevious ? previousResults!.current : currentRecords;
   const visibleHistory = showingPrevious ? previousResults!.history : historyRecords;
   const visibleHistoryExpanded = showingPrevious ? previousResults!.historyVisible : historyVisible;
-  const canActivate = semanticMode || canActivateSearchResult({ inputPending, showingPrevious, hasResults });
+  const canActivate = smartMode ? !smartBusy && Boolean(smartResult) : semanticMode || canActivateSearchResult({ inputPending, showingPrevious, hasResults });
   useEffect(() => {
-    if (semanticMode || inputPending) return;
+    if (specialMode || inputPending) return;
     if (hasResults) {
       setPreviousResults({ favorites: localOnly, current: currentRecords, history: historyRecords, historyVisible });
     } else if (display === "empty" || display === "failed") {
       setPreviousResults(undefined);
     }
-  }, [semanticMode, inputPending, hasResults, localOnly, currentRecords, historyRecords, historyVisible, display]);
+  }, [specialMode, inputPending, hasResults, localOnly, currentRecords, historyRecords, historyVisible, display]);
 
-  const showSearchDelay = !semanticMode && Boolean(query.trim()) && display === "searching" && !showingPrevious;
+  const showSearchDelay = !specialMode && Boolean(query.trim()) && display === "searching" && !showingPrevious;
   useEffect(() => {
     setSlowSearch(false);
     if (!showSearchDelay) return;
@@ -416,11 +468,11 @@ export default function App() {
         const status = record.type === "ntfs"
           ? { tone: "", label: record.file.cached ? "缓存" : record.file.directory ? "文件夹" : "" }
           : record.type === "download" && record.file.pathStatus !== "present"
-            ? { tone: record.file.pathStatus === "missing" ? "warn" : "",
-              label: record.file.pathStatus === "missing" ? "历史下载" : "状态未确认" }
+            ? { tone: record.file.pathStatus === "missing" || record.file.pathStatus === "recycled" ? "warn" : "",
+              label: record.file.pathStatus === "recycled" ? "在回收站" : record.file.pathStatus === "missing" ? (record.file.manager === "motw" ? "历史文件" : "历史下载") : "状态未确认" }
             : recordStatus(record);
         const subtitle = record.type === "local" ? (record.file.currentPath || file.path)
-          : record.type === "ntfs" ? record.file.path : (record.file.domain || file.path);
+          : record.type === "ntfs" ? record.file.path : record.file.manager === "motw" && record.file.pathStatus === "present" ? file.path : (record.file.domain || file.path);
         const needle = searchQuery.trim().toLowerCase();
         const sourceMatched = record.type === "download" && needle.length > 0
           && [record.file.domain, record.file.sourceTitle].some((value) => value.toLowerCase().includes(needle));
@@ -445,7 +497,8 @@ export default function App() {
             {record.type === "local" && (semanticMode || record.file.textMatched === 1) &&
               <small>{semanticMode ? "语义匹配" : "正文匹配"}</small>}
             {record.type === "local" && !semanticMode && record.file.annotationMatched === 1 && <small>备注或标签匹配</small>}
-            {sourceMatched && <small>{record.type === "download" && record.file.manager === "aria2" ? "下载地址匹配" : "来源匹配"}</small>}
+            {smartMode && "evidence" in record && <small>{(record as SmartRecord).evidence.join(" · ")}</small>}
+            {!smartMode && sourceMatched && <small>{record.type === "download" && record.file.manager === "aria2" ? "下载地址匹配" : "来源匹配"}</small>}
           </span>
           {(record.type === "download" || (record.type === "ntfs" && (Boolean(status.label) || Boolean((record.file as NtfsRanking & {favorite?: number}).favorite))) ||
             (record.type === "local" && (record.file.status !== "present" || Boolean(record.file.currentPath) || record.file.favorite === 1))) &&
@@ -473,12 +526,13 @@ export default function App() {
         <p className="muted">索引和连接在后台运行，需要时再调整。</p>
         <div className="settings-links">
           <button type="button" className="secondary" onClick={() => setView("folders")}>授权目录与正文搜索</button>
-          <button type="button" className="secondary" onClick={() => { setFilter("all"); setMode("semantic"); setView("files"); }}>本地 AI 搜索</button>
+          <button type="button" className="secondary" onClick={() => { setFilter("all"); setMode("smart"); setView("files"); }}>本地 AI 找回</button>
+          <button type="button" className="secondary" onClick={() => { setFilter("all"); setMode("semantic"); setView("files"); }}>正文语义搜索</button>
         </div>
         <div className="settings-tools">
           <HotkeySettings />
+          <SourceMemorySettings />
           <ChromeConnection refresh={refreshDownloads} />
-          <Aria2Connection />
           <DesktopUpdates />
           <PerformanceDiagnostics />
         </div>
@@ -488,14 +542,15 @@ export default function App() {
           <form className="search-form" onSubmit={(event) => {
             event.preventDefault();
             if (semanticMode && semantic.model?.ready && textEnabled) void semantic.search(query);
-            if (!semanticMode && canActivate) resultPane.current?.querySelector<HTMLButtonElement>(".result-row:not(:disabled)")?.click();
+            if (smartMode) void runSmart();
+            if (!specialMode && canActivate) resultPane.current?.querySelector<HTMLButtonElement>(".result-row:not(:disabled)")?.click();
           }}>
           <label className="search-box">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
               <circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 4.4 4.4"/>
             </svg>
             <input type="search" ref={searchInput} aria-label="搜索文件和来源"
-              placeholder={semanticMode ? "用一句话描述你记得的内容" : "搜索文件名、网站或下载线索"}
+              placeholder={specialMode ? "用一句话描述你记得的文件" : "搜索文件名、网站或下载线索"}
               value={query} onChange={(event) => { setQuery(event.target.value); setSelected(null); setExpandedResults(false); setError(""); }}
               onKeyDown={(event) => {
                 if (event.key !== "ArrowDown" || !canActivate) return;
@@ -504,10 +559,37 @@ export default function App() {
               }} />
             {showSearchDelay && slowSearch && <span className="search-delay-spinner" role="status" aria-label="检索中" />}
           </label>
+          {smartMode && <button disabled={smartBusy || !query.trim()}>找回</button>}
           {semanticMode && <button disabled={semantic.searching || !semantic.model?.ready || !textEnabled || !query.trim()}>搜索</button>}
           <button type="button" className="secondary" aria-pressed={localOnly} title="仅显示收藏" onClick={() => { setMode("literal"); setFilter(localOnly ? "all" : "favorites"); setSelected(null); }}>{localOnly ? "★ 收藏" : "☆ 收藏"}</button>
-          {semanticMode && <button type="button" className="secondary" onClick={() => setMode("literal")}>普通搜索</button>}
+          {!specialMode && <button type="button" className="secondary" onClick={() => {setFilter("all");setSelected(null);setMode("smart");searchInput.current?.focus();}}>AI 找回</button>}
+          {specialMode && <button type="button" className="secondary" onClick={() => {setSelected(null);setMode("literal");}}>普通搜索</button>}
           </form>
+          {smartMode && <div className="semantic-options">
+            <p className="muted">例如：上周下载的 PDF、从 GitHub 下载的操作系统资料、已删除的实验报告。</p>
+            <label><input type="checkbox" checked={smartModel} disabled={smartBusy} onChange={event=>setSmartModel(event.target.checked)} /> 可用时补充本地正文语义匹配</label>
+            {smartModel && !semantic.model?.ready && <p className="muted">无需模型即可按来源、时间和文件名检索。<button type="button" className="secondary" disabled={semantic.installing || smartBusy} onClick={()=>void semantic.install()}>{semantic.installing?"下载中…":"下载本地模型"}</button></p>}
+            {smartModel && !textEnabled && <p className="muted">正文语义匹配需开启<button type="button" className="secondary" onClick={()=>setView("folders")}>授权目录正文索引</button>。</p>}
+            {smartBusy && <p role="status">正在智能检索…</p>}
+            {smartError && <p className="error" role="alert">{smartError}</p>}
+            {smartResult && <>
+              <p><strong>查询条件：</strong>{[
+                smartResult.plan.topic && "主题："+smartResult.plan.topic,
+                smartResult.plan.category === "software" && "类别：软件（含可能的软件压缩包）",
+                smartResult.plan.category === "courseware" && "类别：课件",
+                smartResult.plan.domain && "来源："+smartResult.plan.domain,
+                smartResult.plan.extensions.length && "类型："+smartResult.plan.extensions.join(" / "),
+                smartResult.plan.range && "时间："+smartResult.plan.range.label,
+                smartResult.plan.status && "状态："+({present:"现存",missing:"历史及回收站",recycled:"回收站"} as Record<string,string>)[smartResult.plan.status],
+                smartResult.plan.favorites && "已收藏",
+                smartResult.plan.recorded && "来源记录",
+              ].filter(Boolean).join(" · ")}</p>
+              {smartResult.semanticUsed && <p className="muted">本地模型比较了 {smartResult.semanticIndexed} 份正文。</p>}
+              {smartResult.notes.map(note=><p key={note} className="muted">{note}</p>)}
+              {smartResult.truncated && <p className="muted">本次检索采用有界候选范围，缩小条件可提高召回。</p>}
+              {!smartResult.records.length && <p className="empty">没有找到符合条件的记录。</p>}
+            </>}
+          </div>}
           {semanticMode ? <div className="semantic-options">
             {semantic.error && <p className="error" role="alert">{semantic.error}</p>}
             {!textEnabled && <p>先在<button type="button" className="secondary" onClick={() => setView("folders")}>授权目录</button>开启正文索引。</p>}
@@ -525,13 +607,13 @@ export default function App() {
             {semanticResult?.truncated && <p className="muted">本次比较了最近索引的 500 份文件。</p>}
           </div> : null}
           {error && <p className="error" role="alert">{error}</p>}
-          {!semanticMode && browser?.error && !localOnly && <p className="error" role="alert">{browser.error}</p>}
-          {!semanticMode && matched?.error && <p className="error" role="alert">{matched.error}</p>}
-          {!semanticMode && display === "empty" && <p className="empty">{searchQuery.trim() || filter !== "all"
+          {!specialMode && browser?.error && !localOnly && <p className="error" role="alert">{browser.error}</p>}
+          {!specialMode && matched?.error && <p className="error" role="alert">{matched.error}</p>}
+          {!specialMode && display === "empty" && <p className="empty">{searchQuery.trim() || filter !== "all"
             ? "没有找到匹配的记录。" : "输入文件名、拼音或来源即可开始搜索。常用文件会显示在这里。"}</p>}
-          {renderRecords(visibleCurrent, semanticMode ? "相近内容" : "搜索结果")}
+          {renderRecords(visibleCurrent, smartMode ? "智能找回结果" : semanticMode ? "相近内容" : "搜索结果")}
           {!semanticMode && visibleHistory.length > 0 && <>
-            {visibleCurrent.length > 0 && <button type="button"
+            {!smartMode && visibleCurrent.length > 0 && <button type="button"
               className="secondary history-toggle" disabled={!canActivate} aria-expanded={visibleHistoryExpanded}
               onClick={() => { setShowHistory((previous) => !previous); setExpandedResults(false); setSelected(null); }}>
               {visibleHistoryExpanded ? "收起历史记录" : "查看 " + visibleHistory.length + " 条相关下载与历史记录"}
@@ -539,7 +621,7 @@ export default function App() {
             </button>}
             {visibleHistoryExpanded && renderRecords(visibleHistory, "历史与找回")}
           </>}
-          <NtfsQuickResults enabled={!semanticMode} />
+          <NtfsQuickResults enabled={!specialMode} />
         </section>
         {selectedRecord && (selectedRecord.type === "ntfs"
           ? <NtfsDetails key={unifiedKey(selectedRecord)} file={selectedRecord.file} onClose={closeDetails}

@@ -42,3 +42,15 @@ export function canActivateSearchResult({
 }): boolean {
   return !inputPending && !showingPrevious && hasResults;
 }
+
+export type FileSearchSnapshot<T> = { query: string; favorites: boolean; files: T[]; phase: SearchPhase; error?: string };
+
+// Retain the settled same-query rows while a background refresh is incomplete.
+// A new query can render its fast results immediately. Only a completed refresh
+// may remove rows (e.g. when a file was deleted).
+export function fastSearchSnapshot<T>(previous: FileSearchSnapshot<T> | undefined,
+  query: string, favorites: boolean, files: T[], supplement: boolean): FileSearchSnapshot<T> {
+  const same = previous?.query === query && previous.favorites === favorites;
+  return { query, favorites, phase: supplement ? "supplementing" : "complete",
+    files: supplement && same && previous.files.length ? previous.files : files };
+}

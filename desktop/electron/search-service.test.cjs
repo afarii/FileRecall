@@ -132,3 +132,54 @@ test("slow download-source results run in their own worker and are searchable by
   // The primary filename worker remains independently usable.
   assert.deepEqual(await search.searchUnified("old", []), []);
 });
+
+
+test("MOTW source lookup runs independently of filename search and works without browser extension", async (t) => {
+  const { MotwMemory } = require("./motw-memory.cjs");
+  const root = await mkdtemp(join(tmpdir(), "filerecall-motw-search-"));
+  const localDatabase = join(root, "files.sqlite");
+  const motwDatabase = join(root, "motw-memory.sqlite");
+  const local = new FileIndex(localDatabase);
+  const memory = new MotwMemory(motwDatabase);
+  const search = createSearchService({ localDatabase, motwDatabase, applicationData: root });
+  t.after(async () => { await search.close(); memory.close(); local.close(); await rm(root, {recursive:true, force:true}); });
+  memory.save({ volume:"a", id:"77", identity:"1:77:100", path:"C:\\Downloads\\10mb.dat" },
+    { referrerUrl:"https://testfile.cc/" });
+  const hits = await search.searchDownloads("testfile.cc");
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].manager, "motw");
+  assert.equal(hits[0].name, "10mb.dat");
+  assert.deepEqual(await search.searchUnified("testfile.cc", []), []);
+  memory.markDeleted("a", "77");
+  assert.equal((await search.searchDownloads("testfile.cc"))[0].id, hits[0].id);
+});
+
+
+test("smart directory context finds chapter slides while ordinary search stays unchanged",async t=>{
+  const root=await mkdtemp(join(tmpdir(),"filerecall-courseware-"));
+  const localDatabase=join(root,"files.sqlite"),ntfsDatabase=join(root,"ntfs.sqlite");
+  const local=new FileIndex(localDatabase),catalog=new NtfsCatalog(ntfsDatabase,join(root,"app-data"));
+  const search=createSearchService({localDatabase,ntfsDatabase,applicationData:join(root,"app-data")});
+  t.after(async()=>{await search.close();local.close();catalog.close();await rm(root,{recursive:true,force:true});});
+  catalog.enable("E","test-volume");
+  const row=(id,parent,directory,name,attributes=0)=>({id,parent,directory,name,attributes,reason:0});
+  catalog.apply("E",[
+    row("51","5","E:\\","算法设计与分析",16),
+    row("52","51","E:\\算法设计与分析","第1讲-算法绪论.pptx"),
+    row("53","51","E:\\算法设计与分析","第3讲-分治法.ppt"),
+    row("54","51","E:\\算法设计与分析","第4讲-动态规划.pptx"),
+    row("55","51","E:\\算法设计与分析","作业.docx"),
+    row("56","5","E:\\","计算机网络",16),
+    row("57","56","E:\\计算机网络","第3讲.ppt"),
+  ],true);
+  catalog.finishBuild("E");
+  const drives=[{drive:"E",cached:false}];
+  const hits=await search.smartContext({topic:"算法",extensions:["ppt","pptx","pdf"],favorites:false},drives);
+  assert.deepEqual(hits.map(r=>r.file.id).sort(),["52","53","54"]);
+  assert.ok(!(await search.searchUnified("算法",drives)).some(r=>r.file.id==="53"));
+  assert.deepEqual(await search.searchUnified("sfkj",drives), []);
+  assert.deepEqual(await search.searchUnifiedDeep("sfkj",drives), []);
+  catalog.favorite("E","53",true);
+  const favorites=await search.smartContext({topic:"算法",extensions:["ppt","pptx"],favorites:true},drives);
+  assert.deepEqual(favorites.map(r=>r.file.id),["53"]);
+});

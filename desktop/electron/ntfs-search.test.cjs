@@ -78,6 +78,8 @@ test("NTFS resumes changes, moves directory descendants and rebuilds if the jour
   assert.equal(service.search("new\\report")[0].path, "E:\\New\\report中文.txt");
   assert.deepEqual(service.search("old\\report"), []);
   assert.deepEqual(service.search("notes"), []);
+  assert.equal(service.sourceStateForVolume(testVolume, "53").state, "missing");
+  assert.equal(service.sourceStateForVolume(testVolume, "52").state, "present");
   assert.ok(affected.includes("E:\\Old") && affected.includes("E:\\New"));
   assert.equal(service.catalog.drives()[0].cursor, "25");
   assert.ok(requests.some(([verb, drive, cursor]) => verb === "read" && drive === "E" && cursor === "10"));
@@ -95,6 +97,7 @@ test("NTFS resumes changes, moves directory descendants and rebuilds if the jour
   service.schedulePoll();
   await service.tail;
   assert.equal(service.status().drives[0].phase, "error");
+  assert.equal(service.sourceStateForVolume(testVolume, "53").state, "unknown");
   assert.deepEqual(service.search("listing"), []);
   await service.disable("E");
   assert.equal(service.status().drives[0].phase, "paused");
@@ -199,4 +202,30 @@ test("persisted MFT snapshot is searchable on restart and avoids a full enumerat
   await reopened.enable("E");
   await reopened.tail;
   assert.equal(reopened.search("sy")[0].name, "实验报告.pdf");
+});
+
+
+test("source backfill is scoped to user folders, paged and resumable", t => {
+  const { NtfsCatalog } = require("./ntfs-catalog.cjs");
+  const catalog = new NtfsCatalog(":memory:", "C:\\FileRecall-data");
+  t.after(()=>catalog.close());
+  catalog.enable("C",testVolume);
+  catalog.apply("C",[
+    row("51","5","C:\\","Downloads",{attributes:16}),
+    row("52","5","C:\\","Downloads-other",{attributes:16}),
+    row("53","51","C:\\Downloads","sub",{attributes:16}),
+    row("61","51","C:\\Downloads","a.pdf"),
+    row("62","51","C:\\Downloads","b.pdf"),
+    row("63","53","C:\\Downloads\\sub","c.pdf"),
+    row("64","52","C:\\Downloads-other","outside.pdf"),
+  ],true);
+  let cursor={}, ids=[], done=false;
+  for(let i=0;i<12;i++){
+    const step=catalog.sourceBackfillStep("C","C:\\Downloads",cursor);
+    if(step.done){done=true;break;}
+    cursor=JSON.parse(JSON.stringify(step.cursor));
+    if(step.id)ids.push(step.id);
+  }
+  assert.equal(done,true);
+  assert.deepEqual(ids,["61","62","63"]);
 });

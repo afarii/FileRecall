@@ -8,6 +8,7 @@ const { performance } = require("node:perf_hooks");
 const { FileIndex } = require("./indexer.cjs");
 const { NtfsCatalog, fullPath } = require("./ntfs-catalog.cjs");
 const { DownloadSources } = require("./download-sources.cjs");
+const { MotwMemory } = require("./motw-memory.cjs");
 const { existsSync } = require("node:fs");
 const { mergeFileSearch } = require("./unified-search.cjs");
 const { compareFiles } = require("./search-relevance.cjs");
@@ -15,6 +16,7 @@ const { compareFiles } = require("./search-relevance.cjs");
 let local;
 let ntfs;
 let downloads;
+let motw;
 function localReader() {
   if (!local) {
     const reader = Object.create(FileIndex.prototype);
@@ -42,12 +44,24 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
       local?.db.close();
       ntfs?.db.close();
       downloads?.close();
+      motw?.close();
       local = undefined;
       ntfs = undefined;
       downloads = undefined;
+      motw = undefined;
       files = [];
     } else if (kind === "local") {
       files = localReader().search(query);
+    } else if (kind === "smart-sources") {
+      files=[];
+      if(workerData.motwDatabase && existsSync(workerData.motwDatabase)){
+        motw ??= new MotwMemory(workerData.motwDatabase,{readOnly:true});
+        files.push(...motw.smartCandidates(query));
+      }
+      if(workerData.downloadsDatabase && existsSync(workerData.downloadsDatabase)){
+        downloads ??= new DownloadSources(workerData.downloadsDatabase,{readOnly:true});
+        files.push(...downloads.smartCandidates(query));
+      }
     } else if (kind === "downloads") {
       if (!workerData.downloadsDatabase || !existsSync(workerData.downloadsDatabase)) {
         files = [];
@@ -55,6 +69,16 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
         downloads ??= new DownloadSources(workerData.downloadsDatabase, { readOnly: true });
         files = downloads.search(query).slice(0, 80);
       }
+      if (workerData.motwDatabase && existsSync(workerData.motwDatabase)) {
+        motw ??= new MotwMemory(workerData.motwDatabase, { readOnly: true });
+        files = [...motw.search(query), ...files];
+      }
+    } else if (kind === "smart-context") {
+      const catalog=ntfsReader();
+      files=catalog?(drives||[]).flatMap(({drive,cached})=>catalog.smartContext(drive,query).map(row=>({
+        type:"ntfs",file:{id:row.id,drive,name:row.name,path:fullPath(row),directory:false,cached,
+          favorite:row.favorite||0,useCount:row.useCount||0,lastUsedAt:row.lastUsedAt||0}
+      }))):[];
     } else if (kind === "unified" || kind === "unified-deep") {
       const list = Array.isArray(drives) ? drives : [];
       const source = localReader();

@@ -12,7 +12,7 @@ function createSemanticSearch(databasePath, modelPath, report) {
     worker = null;
   }
   return {
-    search(query) {
+    search(query, options) {
       if (pending) throw new Error("已有语义搜索正在运行。");
       if (!worker) {
         worker = new Worker(join(__dirname, "semantic-worker.cjs"), { workerData: { databasePath, modelPath } });
@@ -29,7 +29,7 @@ function createSemanticSearch(databasePath, modelPath, report) {
       }
       return new Promise((resolve, reject) => {
         pending = { resolve, reject };
-        worker.postMessage(query);
+        worker.postMessage(options ? { query, ...options } : query);
       });
     },
     clear() {

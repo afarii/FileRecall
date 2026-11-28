@@ -22,8 +22,8 @@ export function recordStatus(record: SearchRecord) {
   }
   const { file } = record;
   return {
-    label: sourceLabels[file.sourceStatus],
-    tone: file.canOpenSource ? "good" : file.sourceStatus === "candidate" ? "warn" : "",
+    label: file.manager === "motw" ? "来源匹配" : sourceLabels[file.sourceStatus],
+    tone: file.manager === "motw" ? "warn" : file.canOpenSource ? "good" : file.sourceStatus === "candidate" ? "warn" : "",
   };
 }
 
@@ -63,6 +63,9 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
   const [deciding, setDeciding] = useState(false);
   const [sourceError, setSourceError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const [sourceFavorite, setSourceFavorite] = useState<boolean | null>(null);
+  const [confirmForget, setConfirmForget] = useState(false);
+  const motwId = record.type === "download" && record.file.manager === "motw" ? record.file.id : null;
 
   useEffect(() => {
     let active = true;
@@ -76,8 +79,42 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
       }).catch(() => { if (active) setSourceError("无法读取关联的本地文件。"); });
     }
     return () => { active = false; };
-  }, [localFile?.path, localFile?.status, localFile?.currentPath, localFile?.modifiedAt, browserId]);
+  }, [localFile?.path, localFile?.status, localFile?.currentPath, localFile?.modifiedAt, browserId, file.path, record.type === "download" ? record.file.pathStatus : null]);
 
+  useEffect(() => {
+    let active = true;
+    setSourceFavorite(null);
+    setConfirmForget(false);
+    if (motwId) void window.fileRecall.sourceFileState(motwId).then(state => {
+      if (active) setSourceFavorite(state?.favorite ?? null);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [motwId, file.path, record.type === "download" ? record.file.pathStatus : null]);
+
+  async function restoreSource() {
+    if (!motwId || deciding) return;
+    setDeciding(true);
+    setActionMessage("");
+    try {
+      const result = await window.fileRecall.restoreSourceFile(motwId);
+      setActionMessage(result.ok ? "文件已还原，索引将自动更新。" : result.message ?? "无法自动还原。");
+    } catch { setActionMessage("无法自动还原，请在回收站中手动还原。"); }
+    finally { setDeciding(false); }
+  }
+  async function sourceAction(action: "open" | "favorite" | "forget") {
+    if (!motwId) return;
+    setActionMessage("");
+    setDeciding(true);
+    try {
+      const ok = action === "open" ? await window.fileRecall.openSourceFile(motwId)
+        : action === "favorite" ? await window.fileRecall.favoriteSourceFile(motwId, !sourceFavorite)
+        : await window.fileRecall.forgetSource(motwId);
+      if (!ok) setActionMessage("操作未完成，请重新搜索。");
+      else if (action === "favorite") setSourceFavorite(!sourceFavorite);
+      else if (action === "forget") onClose();
+    } catch { setActionMessage("操作失败，请重试。"); }
+    finally { setDeciding(false); }
+  }
   async function decideSource(id: string, decision: SourceDecision) {
     if (!localFile || !provenance?.identity) return;
     setDeciding(true);
@@ -160,7 +197,7 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
         {!confirmed && provenance?.candidates.map((candidate) => <div className="source-candidate" key={candidate.id}>
           <strong>{candidate.name}</strong> <span className="badge warn">{candidate.evidence} · 待核对</span>
           <p>{candidate.path}</p>
-          <p className="muted">{[candidate.manager === "aria2" ? "Motrix／aria2" : "Chrome", candidate.domain, candidate.sourceTitle,
+          <p className="muted">{[candidate.manager === "aria2" ? "旧下载记录" : "Chrome", candidate.domain, candidate.sourceTitle,
             new Date(candidate.startedAt).toLocaleString()].filter(Boolean).join(" · ")}</p>
           <div className="actions">
             <button disabled={deciding} onClick={() => void decideSource(candidate.id, "confirmed")}>确认是同一文件</button>
@@ -177,15 +214,24 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
         <FileNotes key={provenance.identity} path={file.path} identity={provenance.identity} initial={provenance.annotation} />}
     </> : <>
       <section className="detail-section">
-        <h3>下载记录</h3><dl>
-          <dt>原路径</dt><dd>{file.path}</dd>
-          <dt>原路径状态</dt><dd>{{ present: "原路径有文件", missing: "原路径已丢失", unknown: "原路径状态未知" }[record.file.pathStatus]}</dd>
-          <dt>{record.file.manager === "aria2" ? "首次导入" : "下载时间"}</dt><dd>{new Date(record.file.startedAt).toLocaleString()}</dd>
-          {linked && <><dt>{linked.status === "present" ? "当前位置" : "关联的历史路径"}</dt><dd>{linked.path}</dd></>}
+        <h3>{record.file.manager === "motw" ? "来源记忆" : "下载记录"}</h3><dl>
+          <dt>{record.file.manager === "motw" ? "记录路径" : "原路径"}</dt><dd>{file.path || "原路径未知"}</dd>
+          <dt>{record.file.manager === "motw" ? "文件状态" : "原路径状态"}</dt><dd>{{ present: "文件存在", missing: "文件已丢失", unknown: "文件状态未知", recycled: "在回收站" }[record.file.pathStatus]}</dd>
+          <dt>{record.file.manager === "motw" ? "首次观察" : record.file.manager === "aria2" ? "首次导入" : "下载时间"}</dt><dd>{new Date(record.file.startedAt).toLocaleString()}</dd>
+          {linked?.path && linked.path !== file.path && <><dt>{linked.status === "present" ? "当前位置" : "关联的历史路径"}</dt><dd>{linked.path}</dd></>}
         </dl>
         <div className="actions">
-          {linked?.status === "present" && <button onClick={() => reveal(linked.path)}>定位现址</button>}
-          <button className="secondary" onClick={() => void fileAction("copy")}>复制原路径</button>
+          {motwId && record.file.pathStatus === "recycled" && <button disabled={deciding} onClick={() => void restoreSource()}>{deciding ? "处理中…" : "还原文件"}</button>}
+          {linked?.status === "present" && record.file.pathStatus !== "recycled" && <button onClick={() => {
+            const api = window.fileRecall as typeof window.fileRecall & { revealLinkedDownload: (id: string) => Promise<boolean> };
+            void api.revealLinkedDownload(record.file.id).then((ok) => { if (!ok) setActionMessage("文件位置已改变，请重新打开详情。"); })
+              .catch(() => setActionMessage("无法定位关联文件。"));
+          }}>定位现址</button>}
+          {motwId && record.file.pathStatus === "present" && linked?.status === "present" && <>
+            <button className="secondary" disabled={deciding} onClick={() => void sourceAction("open")}>打开文件</button>
+            {sourceFavorite !== null && <button className="secondary" disabled={deciding} onClick={() => void sourceAction("favorite")}>{sourceFavorite ? "★ 取消收藏" : "☆ 收藏文件"}</button>}
+          </>}
+          {file.path && <button className="secondary" onClick={() => void fileAction("copy")}>复制记录路径</button>}
         </div>
       </section>
       <section className="detail-section">
@@ -193,10 +239,15 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
         <p>{[record.file.domain, record.file.sourceTitle].filter(Boolean).join(" · ") || status.label}</p>
         {record.file.manager === "aria2" && <p className="muted">下载器只提供任务地址，来源网页未知。</p>}
         {record.file.canOpenSource && <button onClick={() => openSource(record.file.id)}>
-          {record.file.pathStatus === "missing" ? "查看来源，尝试找回"
+          {record.file.pathStatus === "missing" || record.file.pathStatus === "recycled" ? "查看来源，尝试找回"
             : record.file.manager === "aria2" ? "打开下载地址" : "打开来源页面"} ↗</button>}
-        {record.file.sourceStatus === "candidate" && <p className="muted">可在 Chrome 扩展中核对来源。</p>}
+        {record.file.manager === "motw" ? <p className="muted">来源来自 Windows 文件标记，可能被修改。打开前请核对网址。</p> : record.file.sourceStatus === "candidate" && <p className="muted">可在 Chrome 扩展中核对来源。</p>}
       </section>
+      {motwId && <section className="detail-section">
+        {confirmForget ? <><p className="muted">删除这条 Windows 来源记录，磁盘文件会保留；此文件身份不再自动采集。</p>
+          <div className="actions"><button disabled={deciding} onClick={() => void sourceAction("forget")}>确认删除来源</button><button className="secondary" onClick={() => setConfirmForget(false)}>取消</button></div></>
+          : <button className="secondary" onClick={() => setConfirmForget(true)}>删除来源记录</button>}
+      </section>}
     </>}
     {sourceError && <p className="error" role="alert">{sourceError}</p>}
     {actionMessage && <p className="muted" role="status">{actionMessage}</p>}
