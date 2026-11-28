@@ -52,6 +52,16 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
       files = [];
     } else if (kind === "local") {
       files = localReader().search(query);
+    } else if (kind === "smart-sources") {
+      files=[];
+      if(workerData.motwDatabase && existsSync(workerData.motwDatabase)){
+        motw ??= new MotwMemory(workerData.motwDatabase,{readOnly:true});
+        files.push(...motw.smartCandidates(query));
+      }
+      if(workerData.downloadsDatabase && existsSync(workerData.downloadsDatabase)){
+        downloads ??= new DownloadSources(workerData.downloadsDatabase,{readOnly:true});
+        files.push(...downloads.smartCandidates(query));
+      }
     } else if (kind === "downloads") {
       if (!workerData.downloadsDatabase || !existsSync(workerData.downloadsDatabase)) {
         files = [];
