@@ -421,8 +421,8 @@ export default function App() {
         const status = record.type === "ntfs"
           ? { tone: "", label: record.file.cached ? "缓存" : record.file.directory ? "文件夹" : "" }
           : record.type === "download" && record.file.pathStatus !== "present"
-            ? { tone: record.file.pathStatus === "missing" ? "warn" : "",
-              label: record.file.pathStatus === "missing" ? (record.file.manager === "motw" ? "历史文件" : "历史下载") : "状态未确认" }
+            ? { tone: record.file.pathStatus === "missing" || record.file.pathStatus === "recycled" ? "warn" : "",
+              label: record.file.pathStatus === "recycled" ? "在回收站" : record.file.pathStatus === "missing" ? (record.file.manager === "motw" ? "历史文件" : "历史下载") : "状态未确认" }
             : recordStatus(record);
         const subtitle = record.type === "local" ? (record.file.currentPath || file.path)
           : record.type === "ntfs" ? record.file.path : record.file.manager === "motw" && record.file.pathStatus === "present" ? file.path : (record.file.domain || file.path);
