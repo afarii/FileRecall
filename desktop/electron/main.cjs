@@ -16,6 +16,7 @@ const { createSemanticSearch } = require("./semantic-search.cjs");
 const { createProvenance } = require("./provenance.cjs");
 const { NtfsSourceLinks, createNtfsProvenance, verifiedTarget } = require("./ntfs-provenance.cjs");
 const { MotwMemory } = require("./motw-memory.cjs");
+const { historicalLocation, resolveRememberedFile } = require("./recycle-path.cjs");
 const { createAria2Connection } = require("./aria2-connection.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { createNtfsService } = require("./ntfs-service.cjs");
@@ -334,13 +335,7 @@ app.whenReady().then(() => {
     try { return memory.byId(id) ?? null; } finally { memory.close(); }
   }
   async function resolveMotw(row) {
-    if (!row) return null;
-    if (row.deleted) return { path: row.path, name: row.name, status: "missing" };
-    const current = await Promise.resolve().then(async () => verifiedTarget(await ntfs?.sourceTargetForVolume(row.volume, row.frn))).catch(() => null);
-    if (current?.identity === row.identity)
-      return { path: current.path, name: require("node:path").win32.basename(current.path), status: "present" };
-    // Offline, journal catch-up or inaccessible files are unverified, not deleted.
-    return null;
+    return resolveRememberedFile(row, (volume, id) => ntfs?.sourceStateForVolume(volume, id), verifiedTarget);
   }
   async function linkedDownload(id) {
     if (typeof id !== "string" || id.length > 160) return null;
@@ -377,7 +372,7 @@ app.whenReady().then(() => {
       if (row.manager === "motw") {
         const linked = await resolveMotw(motwRecord(row.id));
         return { ...row, path: linked?.path ?? row.path, name: linked?.name ?? row.name,
-          pathStatus: linked?.status ?? "unknown" };
+          pathStatus: linked?.recycled ? "recycled" : linked?.status ?? "unknown" };
       }
       return { ...row, pathStatus: await downloadPathStatus(row.path) };
     }));
@@ -471,7 +466,7 @@ app.whenReady().then(() => {
   ipcMain.handle("files:copy-path", async (_event, kind, key) => {
     if (typeof key !== "string") return false;
     const path = kind === "local" ? (await fileTarget(key) ?? index.get(key)?.path)
-      : kind === "download" && key.length <= 160 ? (key.startsWith("motw:") ? motwRecord(key)?.path : readDownloads((sources) => sources.byId(key)?.path, null)) : null;
+      : kind === "download" && key.length <= 160 ? (key.startsWith("motw:") ? (motwRecord(key) ? historicalLocation(motwRecord(key)).path : null) : readDownloads((sources) => sources.byId(key)?.path, null)) : null;
     if (!path) return false;
     clipboard.writeText(path);
     return true;
