@@ -111,6 +111,12 @@ interface NtfsResult {
 
 interface SourceMemorySettings { available: boolean; enabled: boolean; count: number; }
 
+type SmartRecord = ({type:"local";file:FileRecord}|{type:"ntfs";file:NtfsResult}|{type:"download";file:BrowserDownload}) & {evidence:string[]};
+interface SmartResult {
+  plan: { topic:string;domain:string;extensions:string[];range:{from:number;until:number;label:string}|null;status:string;favorites:boolean;recorded:boolean };
+  records:SmartRecord[];notes:string[];semanticIndexed:number;semanticUsed:boolean;truncated:boolean;
+}
+
 interface Window {
   fileRecall: {
     folders(): Promise<IndexedFolder[]>;
@@ -121,6 +127,7 @@ interface Window {
     addFolder(): Promise<ScanResult | null>;
     rescan(): Promise<ScanResult[]>;
     search(query: string): Promise<FileRecord[]>;
+    smartSearch(query: string, useModel: boolean): Promise<SmartResult>;
     textEnabled(): Promise<boolean>;
     setTextEnabled(enabled: boolean): Promise<void>;
     downloads(query: string, manager?: BrowserDownload["manager"]): Promise<BrowserDownload[]>;
