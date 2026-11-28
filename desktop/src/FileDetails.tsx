@@ -79,7 +79,7 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
       }).catch(() => { if (active) setSourceError("无法读取关联的本地文件。"); });
     }
     return () => { active = false; };
-  }, [localFile?.path, localFile?.status, localFile?.currentPath, localFile?.modifiedAt, browserId]);
+  }, [localFile?.path, localFile?.status, localFile?.currentPath, localFile?.modifiedAt, browserId, file.path, record.type === "download" ? record.file.pathStatus : null]);
 
   useEffect(() => {
     let active = true;
@@ -91,6 +91,16 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
     return () => { active = false; };
   }, [motwId, file.path, record.type === "download" ? record.file.pathStatus : null]);
 
+  async function restoreSource() {
+    if (!motwId || deciding) return;
+    setDeciding(true);
+    setActionMessage("");
+    try {
+      const result = await window.fileRecall.restoreSourceFile(motwId);
+      setActionMessage(result.ok ? "文件已还原，索引将自动更新。" : result.message ?? "无法自动还原。");
+    } catch { setActionMessage("无法自动还原，请在回收站中手动还原。"); }
+    finally { setDeciding(false); }
+  }
   async function sourceAction(action: "open" | "favorite" | "forget") {
     if (!motwId) return;
     setActionMessage("");
@@ -211,12 +221,13 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
           {linked?.path && linked.path !== file.path && <><dt>{linked.status === "present" ? "当前位置" : "关联的历史路径"}</dt><dd>{linked.path}</dd></>}
         </dl>
         <div className="actions">
-          {linked?.status === "present" && <button onClick={() => {
+          {motwId && record.file.pathStatus === "recycled" && <button disabled={deciding} onClick={() => void restoreSource()}>{deciding ? "处理中…" : "还原文件"}</button>}
+          {linked?.status === "present" && record.file.pathStatus !== "recycled" && <button onClick={() => {
             const api = window.fileRecall as typeof window.fileRecall & { revealLinkedDownload: (id: string) => Promise<boolean> };
             void api.revealLinkedDownload(record.file.id).then((ok) => { if (!ok) setActionMessage("文件位置已改变，请重新打开详情。"); })
               .catch(() => setActionMessage("无法定位关联文件。"));
           }}>定位现址</button>}
-          {motwId && linked?.status === "present" && <>
+          {motwId && record.file.pathStatus === "present" && linked?.status === "present" && <>
             <button className="secondary" disabled={deciding} onClick={() => void sourceAction("open")}>打开文件</button>
             {sourceFavorite !== null && <button className="secondary" disabled={deciding} onClick={() => void sourceAction("favorite")}>{sourceFavorite ? "★ 取消收藏" : "☆ 收藏文件"}</button>}
           </>}
