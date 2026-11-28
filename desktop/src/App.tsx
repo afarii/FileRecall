@@ -374,8 +374,8 @@ export default function App() {
   const semanticMode = mode === "semantic";
   const smartMode = mode === "smart";
   const specialMode = semanticMode || smartMode;
-  const smartResult = smartMode && smartResponse?.query === query.trim() ? smartResponse.result : undefined;
-  const smartError = smartMode && smartResponse?.query === query.trim() ? smartResponse.error : undefined;
+  const smartResult = smartMode && smartResponse && smartResponse.query === query.trim() ? smartResponse.result : undefined;
+  const smartError = smartMode && smartResponse && smartResponse.query === query.trim() ? smartResponse.error : undefined;
   const semanticResult = semantic.result?.query === query ? semantic.result.result : undefined;
   const localOnly = filter === "favorites";
   const downloadRecords: SearchRecord[] = useMemo(() => (specialMode || localOnly ||
@@ -527,6 +527,7 @@ export default function App() {
         <div className="settings-links">
           <button type="button" className="secondary" onClick={() => setView("folders")}>授权目录与正文搜索</button>
           <button type="button" className="secondary" onClick={() => { setFilter("all"); setMode("smart"); setView("files"); }}>本地 AI 找回</button>
+          <button type="button" className="secondary" onClick={() => { setFilter("all"); setMode("semantic"); setView("files"); }}>正文语义搜索</button>
         </div>
         <div className="settings-tools">
           <HotkeySettings />
