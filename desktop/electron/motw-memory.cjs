@@ -86,6 +86,28 @@ class MotwMemory {
       manager: "motw", canOpenSource: Boolean(safeHttpUrl(row.referrer) || safeHttpUrl(row.host)),
     }));
   }
+  smartCandidates(plan) {
+    const clauses=[], args=[];
+    if(plan.range){clauses.push("observed>=? AND observed<?");args.push(plan.range.from,plan.range.until);}
+    if(plan.domain){
+      const {domainMatches,urlDomain}=require("./smart-query.cjs");
+      this.db.function("smart_domain",{deterministic:true},(url,domain)=>Number(domainMatches(urlDomain(url),domain)));
+      clauses.push("(smart_domain(host,?)=1 OR smart_domain(referrer,?)=1)");
+      args.push(plan.domain,plan.domain);
+    }
+    if(plan.extensions.length){
+      clauses.push("("+plan.extensions.map(()=>"lower(name) LIKE ?").join(" OR ")+")");
+      args.push(...plan.extensions.map(ext=>"%."+ext));
+    }
+    const rows=this.db.prepare("SELECT * FROM memory WHERE "+(clauses.join(" AND ")||"1")+" ORDER BY observed DESC,id LIMIT 121").all(...args);
+    return rows.map(row=>({
+      id:row.id,...historicalLocation(row),startedAt:row.observed,
+      sourceStatus:"candidate",sourceTitle:row.referrer||row.host,
+      domain:require("./smart-query.cjs").urlDomain(row.referrer||row.host),
+      manager:"motw",canOpenSource:Boolean(safeHttpUrl(row.referrer)||safeHttpUrl(row.host)),
+      sourceDomainMatched:Boolean(plan.domain),
+    }));
+  }
   close() { this.db.close(); }
 }
 
