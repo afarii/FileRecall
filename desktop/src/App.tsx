@@ -576,6 +576,7 @@ export default function App() {
               <p><strong>查询条件：</strong>{[
                 smartResult.plan.topic && "主题："+smartResult.plan.topic,
                 smartResult.plan.category === "software" && "类别：软件（含可能的软件压缩包）",
+                smartResult.plan.category === "courseware" && "类别：课件",
                 smartResult.plan.domain && "来源："+smartResult.plan.domain,
                 smartResult.plan.extensions.length && "类型："+smartResult.plan.extensions.join(" / "),
                 smartResult.plan.range && "时间："+smartResult.plan.range.label,
