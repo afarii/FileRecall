@@ -178,10 +178,10 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
     </> : <>
       <section className="detail-section">
         <h3>{record.file.manager === "motw" ? "来源记忆" : "下载记录"}</h3><dl>
-          <dt>{record.file.manager === "motw" ? "记录路径" : "原路径"}</dt><dd>{file.path}</dd>
-          <dt>{record.file.manager === "motw" ? "文件状态" : "原路径状态"}</dt><dd>{{ present: "原路径有文件", missing: "原路径已丢失", unknown: "原路径状态未知" }[record.file.pathStatus]}</dd>
+          <dt>{record.file.manager === "motw" ? "记录路径" : "原路径"}</dt><dd>{file.path || "原路径未知"}</dd>
+          <dt>{record.file.manager === "motw" ? "文件状态" : "原路径状态"}</dt><dd>{{ present: "文件存在", missing: "文件已丢失", unknown: "文件状态未知", recycled: "在回收站" }[record.file.pathStatus]}</dd>
           <dt>{record.file.manager === "motw" ? "首次观察" : record.file.manager === "aria2" ? "首次导入" : "下载时间"}</dt><dd>{new Date(record.file.startedAt).toLocaleString()}</dd>
-          {linked && <><dt>{linked.status === "present" ? "当前位置" : "关联的历史路径"}</dt><dd>{linked.path}</dd></>}
+          {linked?.path && linked.path !== file.path && <><dt>{linked.status === "present" ? "当前位置" : "关联的历史路径"}</dt><dd>{linked.path}</dd></>}
         </dl>
         <div className="actions">
           {linked?.status === "present" && <button onClick={() => {
@@ -189,7 +189,7 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
             void api.revealLinkedDownload(record.file.id).then((ok) => { if (!ok) setActionMessage("文件位置已改变，请重新打开详情。"); })
               .catch(() => setActionMessage("无法定位关联文件。"));
           }}>定位现址</button>}
-          <button className="secondary" onClick={() => void fileAction("copy")}>复制原路径</button>
+          {file.path && <button className="secondary" onClick={() => void fileAction("copy")}>复制记录路径</button>}
         </div>
       </section>
       <section className="detail-section">
@@ -197,7 +197,7 @@ export default function FileDetails({ record, onClose, reveal, openSource }: {
         <p>{[record.file.domain, record.file.sourceTitle].filter(Boolean).join(" · ") || status.label}</p>
         {record.file.manager === "aria2" && <p className="muted">下载器只提供任务地址，来源网页未知。</p>}
         {record.file.canOpenSource && <button onClick={() => openSource(record.file.id)}>
-          {record.file.pathStatus === "missing" ? "查看来源，尝试找回"
+          {record.file.pathStatus === "missing" || record.file.pathStatus === "recycled" ? "查看来源，尝试找回"
             : record.file.manager === "aria2" ? "打开下载地址" : "打开来源页面"} ↗</button>}
         {record.file.manager === "motw" ? <p className="muted">来源来自 Windows 文件标记，可能被修改。打开前请核对网址。</p> : record.file.sourceStatus === "candidate" && <p className="muted">可在 Chrome 扩展中核对来源。</p>}
       </section>
