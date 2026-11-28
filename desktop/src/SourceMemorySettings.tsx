@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export default function SourceMemorySettings() {
+export default function SourceMemoryPanel() {
   const [state, setState] = useState<SourceMemorySettings>();
   const [busy, setBusy] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
