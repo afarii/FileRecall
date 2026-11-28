@@ -82,16 +82,7 @@ interface SemanticResult {
   truncated: boolean;
 }
 
-interface Aria2Status {
-  connected: boolean;
-  port: number;
-  hasSecret: boolean;
-}
 
-interface Aria2Sync {
-  found: number;
-  changed: number;
-}
 
 interface DesktopUpdateStatus {
   currentVersion: string;
@@ -131,10 +122,6 @@ interface Window {
     textEnabled(): Promise<boolean>;
     setTextEnabled(enabled: boolean): Promise<void>;
     downloads(query: string, manager?: BrowserDownload["manager"]): Promise<BrowserDownload[]>;
-    aria2Status(): Promise<Aria2Status>;
-    connectAria2(port: number, secret: string): Promise<Aria2Sync>;
-    refreshAria2(): Promise<Aria2Sync>;
-    disconnectAria2(): Promise<void>;
     onDownloadsChanged(callback: () => void): () => void;
     chromeStatus(): Promise<{ available: boolean; extensionId: string | null }>;
     connectChrome(extensionId: string): Promise<string | null>;
