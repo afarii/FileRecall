@@ -20,7 +20,7 @@ test("natural language extracts combined constraints and local calendar dates",(
   assert.equal(week.range.from,new Date(2026,10,16).getTime());
   assert.equal(week.range.until,new Date(2026,10,23).getTime());
   assert.equal(parseSmartQuery("之前下载但已经删除的实验报告",now).status,"missing");
-  assert.equal(parseSmartQuery("我收藏的算法课件",now).topic,"算法课件");
+  assert.equal(parseSmartQuery("我收藏的算法课件",now).topic,"算法");
   assert.equal(parseSmartQuery("我收藏的算法课件",now).favorites,true);
   assert.equal(parseSmartQuery("从 testfile.cc 下载的文件",now).domain,"testfile.cc");
   assert.equal(parseSmartQuery("report.pdf",now).topic,"report.pdf");
@@ -94,7 +94,7 @@ test("local smart search preserves favorite/type constraints and model fallback"
     sources:async()=>[],
     resolveSource:async r=>r,
     files:async(query,fav)=>{
-      assert.equal(query,"算法课件");assert.equal(fav,true);
+      assert.equal(query,"算法");assert.equal(fav,true);
       return [{type:"local",file:local("算法课件.pdf",{favorite:1})},{type:"local",file:local("算法课件.docx",{favorite:1})},{type:"local",file:local("算法课件2.pdf")}];
     },
     modelReady:async()=>false,
@@ -114,7 +114,7 @@ test("software category matches source packages without treating software engine
   assert.equal(plan.domain,"github.com");
   assert.ok(plan.extensions.includes("exe"));
   assert.ok(plan.extensions.includes("zip"));
-  assert.equal(parseSmartQuery("关于软件工程的课件",now).category,"");
+  assert.equal(parseSmartQuery("关于软件工程的课件",now).category,"courseware");
   assert.match(parseSmartQuery("关于软件工程的课件",now).topic,/软件工程/);
   const deps={
     sources:async()=>[source("zip","TangoFlux-main.zip"),source("exe","setup.exe"),source("msi","tool.msi"),source("pdf","notes.pdf"),source("wrong","bad.exe",{domain:"other.org",sourceTitle:"https://other.org/"})],
@@ -127,4 +127,24 @@ test("software category matches source packages without treating software engine
   assert.deepEqual(r.records.map(x=>x.file.id),["exe","msi","zip"]);
   assert.ok(r.records[2].evidence.some(x=>x.includes("内容未核验")));
   assert.equal(r.semanticUsed,false);
+});
+
+
+test("courseware search combines subject and parent directory, without model inference",async()=>{
+  const p=parseSmartQuery("算法的课件",now);
+  assert.equal(p.topic,"算法");
+  assert.equal(p.category,"courseware");
+  assert.deepEqual(p.extensions,["ppt","pptx","pdf","odp"]);
+  assert.deepEqual(parseSmartQuery("算法课件 PDF",now).extensions,["pdf"]);
+  const chapter=(id,name)=>({type:"ntfs",file:{id,drive:"E",path:"E:\\算法设计与分析\\"+name,name,cached:false,directory:false}});
+  const first=chapter("1","第1讲-算法绪论.pptx"),second=chapter("2","第3讲-分治法.ppt"),third=chapter("3","第4讲-动态规划.pptx");
+  const deps={
+    files:async query=>{assert.equal(query,"算法");return [first];},
+    context:async plan=>{assert.equal(plan.topic,"算法");return [first,second,third,chapter("4","作业.docx")];},
+    modelReady:async()=>{throw Error("model disabled");},
+  };
+  const result=await smartRecovery("算法的课件",deps,{now,useModel:false});
+  assert.equal(result.records.length,3);
+  assert.ok(result.records.some(r=>r.file.id==="2"&&r.evidence.includes("所属目录与主题匹配")));
+  assert.equal(result.records.find(r=>r.file.id==="1").evidence.length,2);
 });
