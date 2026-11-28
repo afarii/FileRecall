@@ -1,7 +1,9 @@
 "use strict";
 
 const aliases = { github:"github.com", gitlab:"gitlab.com", gitee:"gitee.com", 知乎:"zhihu.com", 哔哩哔哩:"bilibili.com", bilibili:"bilibili.com", 百度网盘:"pan.baidu.com", arxiv:"arxiv.org", huggingface:"huggingface.co" };
+const softwareTypes = ["exe","msi","msix","appx","msixbundle","appxbundle","zip","rar","7z"];
 const types = [
+  [/(?:安装包|安装程序|可执行文件|\bexe\b|\bmsi\b|\bmsix\b|\bappx\b)/ig,["exe","msi","msix","appx","msixbundle","appxbundle"]],
   [/(?:\bpdf\b)/ig,["pdf"]],
   [/(?:\bpptx?\b|幻灯片|演示文稿)/ig,["ppt","pptx"]],
   [/(?:\bdocx?\b|\bword\b)/ig,["doc","docx"]],
@@ -40,7 +42,7 @@ function parseSmartQuery(raw, now=Date.now()) {
   const sites = [];
   text=text.replace(/https?:\/\/[^\s，。；、]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?![a-z0-9-])/ig, match=>{
     // An explicitly named extension is a file term, not a website.
-    if(/\.(?:pdf|docx?|pptx?|xlsx?|txt|md|zip|rar|7z|exe|png|jpe?g|csv|dat)$/i.test(match)&&!/^https?:/i.test(match)) return match;
+    if(/\.(?:pdf|docx?|pptx?|xlsx?|txt|md|zip|rar|7z|exe|msi|msix|appx|msixbundle|appxbundle|png|jpe?g|csv|dat)$/i.test(match)&&!/^https?:/i.test(match)) return match;
     try { const u=new URL(/^https?:/i.test(match)?match:"https://"+match); sites.push(u.hostname.toLowerCase()); return " "; } catch{return match;}
   });
   text=text.replace(/github|gitlab|gitee|知乎|哔哩哔哩|bilibili|百度网盘|arxiv|huggingface/ig, match=>{sites.push(aliases[match.toLowerCase()]);return " ";});
@@ -53,6 +55,7 @@ function parseSmartQuery(raw, now=Date.now()) {
   else if(/仍然存在|现存|未删除|还在(?:电脑|本地)?/.test(text)){status="present";text=text.replace(/仍然存在|现存|未删除|还在(?:电脑|本地)?/g," ");}
   favorites=/收藏/.test(text);text=text.replace(/(?:我)?收藏(?:过|的)?/g," ");
   recorded=/下载|来源|获取/.test(text)||Boolean(domain)||Boolean(range)||status==="recycled"||status==="missing";
+  let category="";
   const extensions=[];
   for(const [pattern,exts] of types) {
     // Keep exact filenames such as report.pdf as a single topic.
@@ -61,11 +64,14 @@ function parseSmartQuery(raw, now=Date.now()) {
       extensions.push(...exts);return " ";
     });
   }
+  // Recognize a final category noun, preserving subjects like 软件工程.
+  text=text.replace(/(?:应用软件|应用程序|软件|程序)(?=\s*(?:[，。！？；、]?\s*$))/g,()=>{category="software";return " ";});
+  if(category==="software"&&!extensions.length)extensions.push(...softwareTypes);
   text=text.replace(/(?:请帮我|帮我|我想|我记得|找一下|找到|查找|搜索|找回|之前|以前|已经|下载|来自|获取|保存|有关|关于|相关|文件|资料|文档|的|从|了|但|在|我)/g," ");
   text=text.replace(/[，。！？；、："'“”‘’]/g," ").replace(/\s+/g," ").trim();
   // Avoid treating generic nouns as an exact keyword. '课件' / '报告' are
   // useful topics and are kept.
-  const plan={topic:text,domain,extensions:[...new Set(extensions)],range,status,favorites,recorded};
+  const plan={topic:text,domain,extensions:[...new Set(extensions)],range,status,favorites,recorded,category};
   if(!plan.topic&&!plan.domain&&!plan.extensions.length&&!plan.range&&!plan.status&&!plan.favorites&&!plan.recorded) throw new Error("请描述文件名、主题、来源或时间。");
   return plan;
 }
@@ -87,4 +93,10 @@ function matchesSource(row,plan){
     (!plan.range||(row.startedAt>=plan.range.from&&row.startedAt<plan.range.until)) &&
     (!plan.status||row.pathStatus===plan.status||(plan.status==="missing"&&row.pathStatus==="recycled"));
 }
-module.exports={parseSmartQuery,domainMatches,urlDomain,extensionMatches,matchesTopic,matchesSource,keyPath};
+function softwareEvidence(name) {
+  const ext=String(name||"").toLowerCase().split(".").at(-1);
+  if(softwareTypes.slice(0,6).includes(ext))return {rank:2,label:"安装包或可执行文件"};
+  if(softwareTypes.slice(6).includes(ext))return {rank:1,label:"可能的软件压缩包（内容未核验）"};
+  return {rank:0,label:""};
+}
+module.exports={parseSmartQuery,domainMatches,urlDomain,extensionMatches,matchesTopic,matchesSource,keyPath,softwareEvidence};
