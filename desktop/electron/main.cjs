@@ -17,6 +17,7 @@ const { createProvenance } = require("./provenance.cjs");
 const { NtfsSourceLinks, createNtfsProvenance, verifiedTarget } = require("./ntfs-provenance.cjs");
 const { MotwMemory } = require("./motw-memory.cjs");
 const { historicalLocation, resolveRememberedFile, isRecyclePath } = require("./recycle-path.cjs");
+const { restoreRememberedFile } = require("./recycle-restore.cjs");
 const { createDesktopUpdates } = require("./desktop-updates.cjs");
 const { createNtfsService } = require("./ntfs-service.cjs");
 const { createSearchService } = require("./search-service.cjs");
@@ -342,6 +343,20 @@ app.whenReady().then(() => {
     const current = await verifiedTarget(await ntfs?.sourceTargetForVolume(row.volume, row.frn));
     return current?.identity === row.identity && !isRecyclePath(current.path) ? current : null;
   }
+  const restoring = new Set();
+  ipcMain.handle("sources:restore", async (_event, id) => {
+    if (closing || !ntfs || typeof id !== "string" || !/^motw:[a-f0-9]{64}$/.test(id) || restoring.has(id))
+      return { ok:false, message:"还原暂不可用或正在进行。" };
+    restoring.add(id);
+    try {
+      const result = await restoreRememberedFile(motwRecord(id), {
+        lookup: (volume, frn) => ntfs.sourceTargetForVolume(volume, frn), verify: verifiedTarget,
+      });
+      send("downloads:changed");
+      if (result.ok) notifyChanged();
+      return result;
+    } finally { restoring.delete(id); }
+  });
   ipcMain.handle("sources:open-file", async (_event, id) => {
     const current = await liveMotw(id);
     if (!current) return false;
