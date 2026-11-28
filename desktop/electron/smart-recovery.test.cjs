@@ -105,3 +105,26 @@ test("local smart search preserves favorite/type constraints and model fallback"
   assert.equal(result.semanticUsed,false);
   assert.ok(result.notes.some(n=>n.includes("尚未就绪")));
 });
+
+
+test("software category matches source packages without treating software engineering as a category",async()=>{
+  const plan=parseSmartQuery("github下载的软件",now);
+  assert.equal(plan.topic,"");
+  assert.equal(plan.category,"software");
+  assert.equal(plan.domain,"github.com");
+  assert.ok(plan.extensions.includes("exe"));
+  assert.ok(plan.extensions.includes("zip"));
+  assert.equal(parseSmartQuery("关于软件工程的课件",now).category,"");
+  assert.match(parseSmartQuery("关于软件工程的课件",now).topic,/软件工程/);
+  const deps={
+    sources:async()=>[source("zip","TangoFlux-main.zip"),source("exe","setup.exe"),source("msi","tool.msi"),source("pdf","notes.pdf"),source("wrong","bad.exe",{domain:"other.org",sourceTitle:"https://other.org/"})],
+    resolveSource:async r=>r,
+    files:async()=>{throw Error("unneeded filename search");},
+    modelReady:async()=>{throw Error("unneeded model");},
+    semantic:async()=>{throw Error("unneeded inference");},
+  };
+  const r=await smartRecovery("github下载的软件",deps,{now});
+  assert.deepEqual(r.records.map(x=>x.file.id),["exe","msi","zip"]);
+  assert.ok(r.records[2].evidence.some(x=>x.includes("内容未核验")));
+  assert.equal(r.semanticUsed,false);
+});
