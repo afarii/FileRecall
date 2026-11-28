@@ -372,6 +372,17 @@ class NtfsSearch {
     return state ? this.sourceTarget(state.drive, id) : null;
   }
 
+  sourceStateForVolume(volume, id) {
+    if (typeof volume !== "string" || typeof id !== "string" || !/^\d{1,20}$/.test(id) ||
+        this.reader?.closed !== false) return { state: "unknown" };
+    const entry = this.catalog.activeDrives().find((row) =>
+      row.volume.toLowerCase() === volume.toLowerCase() && this.sessions.get(row.drive)?.phase === "ready");
+    if (!entry) return { state: "unknown" };
+    const target = this.sourceTarget(entry.drive, id);
+    if (target) return { state: "present", target };
+    return { state: this.catalog.hasItem(entry.drive, id) ? "unknown" : "missing" };
+  }
+
   async close() {
     if (this.closed) return;
     this.closed = true;
