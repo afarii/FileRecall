@@ -80,7 +80,7 @@ function matchesTopic(file,topic){
   return topic.toLowerCase().split(/\s+/).every(word=>hay.includes(word));
 }
 function matchesSource(row,plan){
-  return (!plan.domain||domainMatches(row.domain,plan.domain)||domainMatches(urlDomain(row.sourceTitle),plan.domain)) &&
+  return (!plan.domain||row.sourceDomainMatched===true||domainMatches(row.domain,plan.domain)||domainMatches(urlDomain(row.sourceTitle),plan.domain)) &&
     extensionMatches(row.name,plan.extensions) &&
     (!plan.range||(row.startedAt>=plan.range.from&&row.startedAt<plan.range.until)) &&
     (!plan.status||row.pathStatus===plan.status||(plan.status==="missing"&&row.pathStatus==="recycled"));
