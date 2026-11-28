@@ -109,6 +109,8 @@ interface NtfsResult {
   cached?: boolean;
 }
 
+interface SourceMemorySettings { available: boolean; enabled: boolean; count: number; }
+
 interface Window {
   fileRecall: {
     folders(): Promise<IndexedFolder[]>;
@@ -129,6 +131,13 @@ interface Window {
     openLinkedSource(path: string, id: string): Promise<boolean>;
     provenance(path: string): Promise<FileProvenance>;
     decideSource(path: string, identity: string, id: string, decision: SourceDecision): Promise<FileProvenance>;
+    sourceSettings(): Promise<SourceMemorySettings>;
+    setSourceEnabled(enabled: boolean): Promise<SourceMemorySettings>;
+    clearSources(): Promise<SourceMemorySettings>;
+    forgetSource(id: string): Promise<boolean>;
+    openSourceFile(id: string): Promise<boolean>;
+    sourceFileState(id: string): Promise<{ favorite: boolean } | null>;
+    favoriteSourceFile(id: string, enabled: boolean): Promise<boolean>;
     linkedFile(id: string): Promise<Pick<FileRecord, "path" | "name" | "status"> | null>;
     annotate(path: string, identity: string, input: FileAnnotation): Promise<FileAnnotation>;
     openFile(path: string): Promise<{ ok: boolean; message?: string }>;
