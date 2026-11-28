@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChromeConnection from "./ChromeConnection";
 import HotkeySettings from "./HotkeySettings";
+import SourceMemorySettings from "./SourceMemorySettings";
 import DesktopUpdates from "./DesktopUpdates";
 import NtfsQuickResults from "./NtfsQuickResults";
 import NtfsDetails from "./NtfsDetails";
@@ -363,7 +364,9 @@ export default function App() {
       const compare = (a: UnifiedRecord, b: UnifiedRecord) => {
         const left = a.file as LocalRanking;
         const right = b.file as LocalRanking;
-        return relevance(b, searchQuery) - relevance(a, searchQuery) ||
+        const domainMatch = (record: UnifiedRecord) => record.type === "download" && record.file.domain &&
+          searchQuery.trim().toLowerCase().split(/\s+/).includes(record.file.domain.toLowerCase()) ? 1 : 0;
+        return domainMatch(b) - domainMatch(a) || relevance(b, searchQuery) - relevance(a, searchQuery) ||
           Number(Boolean(right.favorite)) - Number(Boolean(left.favorite)) ||
           (right.useCount ?? 0) - (left.useCount ?? 0) ||
           (right.lastUsedAt ?? 0) - (left.lastUsedAt ?? 0) ||
@@ -375,7 +378,9 @@ export default function App() {
     }
     return { currentRecords: current, historyRecords: history };
   }, [semanticMode, semanticResult, matched, downloadRecords, searchQuery]);
-  const historyVisible = showHistory || currentRecords.length === 0;
+  const exactSource = (record: UnifiedRecord) => record.type === "download" && Boolean(record.file.domain) &&
+    searchQuery.trim().toLowerCase().split(/\s+/).includes(record.file.domain.toLowerCase());
+  const historyVisible = showHistory || currentRecords.length === 0 || historyRecords.some(exactSource);
   const allRecords = useMemo(() => [...currentRecords, ...historyRecords], [currentRecords, historyRecords]);
   const selectedRecord = allRecords.find((record) => unifiedKey(record) === selected);
   const hasResults = allRecords.length > 0;
@@ -481,6 +486,7 @@ export default function App() {
         </div>
         <div className="settings-tools">
           <HotkeySettings />
+          <SourceMemorySettings />
           <ChromeConnection refresh={refreshDownloads} />
           <DesktopUpdates />
           <PerformanceDiagnostics />
