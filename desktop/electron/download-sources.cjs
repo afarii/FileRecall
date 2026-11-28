@@ -136,6 +136,21 @@ class DownloadSources {
     `).all(...args, scope, scope).map(publicRecord);
   }
 
+  smartCandidates(plan) {
+    const clauses=[], args=[];
+    if(plan.range){clauses.push("started_at>=? AND started_at<?");args.push(plan.range.from,plan.range.until);}
+    if(plan.domain){
+      clauses.push("(lower(domain)=? OR lower(domain) LIKE ?)");
+      args.push(plan.domain,"%."+plan.domain);
+    }
+    if(plan.extensions.length){
+      clauses.push("("+plan.extensions.map(()=>"lower(name) LIKE ?").join(" OR ")+")");
+      args.push(...plan.extensions.map(ext=>"%."+ext));
+    }
+    return this.db.prepare("SELECT "+sourceColumns+", manager FROM ("+this.allSources()+") WHERE "+
+      (clauses.join(" AND ")||"1")+" ORDER BY started_at DESC,id LIMIT 121").all(...args).map(publicRecord);
+  }
+
   byId(id) {
     const record = this.rawRecord(id);
     return record ? publicRecord(record) : null;
