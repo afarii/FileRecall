@@ -177,6 +177,8 @@ test("smart directory context finds chapter slides while ordinary search stays u
   const hits=await search.smartContext({topic:"算法",extensions:["ppt","pptx","pdf"],favorites:false},drives);
   assert.deepEqual(hits.map(r=>r.file.id).sort(),["52","53","54"]);
   assert.ok(!(await search.searchUnified("算法",drives)).some(r=>r.file.id==="53"));
+  assert.deepEqual(await search.searchUnified("sfkj",drives), []);
+  assert.deepEqual(await search.searchUnifiedDeep("sfkj",drives), []);
   catalog.favorite("E","53",true);
   const favorites=await search.smartContext({topic:"算法",extensions:["ppt","pptx"],favorites:true},drives);
   assert.deepEqual(favorites.map(r=>r.file.id),["53"]);
