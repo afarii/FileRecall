@@ -4,6 +4,7 @@ const { DatabaseSync } = require("node:sqlite");
 const { win32 } = require("node:path");
 const { nameSearchKeys, queryTerms, termGroups, termCondition } = require("./filename-search.cjs");
 const { prepareQuery, scoreFile, compareFiles } = require("./search-relevance.cjs");
+const { isRecyclePath } = require("./recycle-path.cjs");
 
 const DIRECTORY = 0x10;
 const DELETE = 0x200;
@@ -173,6 +174,26 @@ class NtfsCatalog {
       id = item.parent;
     }
     return win32.join(drive + ":\\", ...names.reverse());
+  }
+
+  // Keyset walk of only the requested user folder. One indexed parent or
+  // file lookup per step; no MFT/whole-drive ADS scan or OFFSET traversal.
+  sourceBackfillStep(drive, root, cursor = {}) {
+    const base = win32.normalize(root).toLowerCase().replace(/\\$/, "");
+    if (!base || isRecyclePath(base)) return { done: true };
+    let { parent, folder = "", parentId = "", file = "" } = cursor;
+    if (!parent) {
+      const next = this.db.prepare(
+        "SELECT id,folded FROM ntfs_parent INDEXED BY ntfs_parent_path WHERE drive=? AND folded>=? AND folded<? AND (folded=? OR folded>=?) AND (folded>? OR (folded=? AND id>?)) ORDER BY folded,id LIMIT 1"
+      ).get(drive, base, base + "\\\uffff", base, base + "\\", folder, folder, parentId);
+      if (!next) return { done: true };
+      parent = next.id; folder = next.folded; parentId = next.id; file = "";
+    }
+    const next = this.db.prepare(
+      "SELECT id FROM ntfs_item INDEXED BY ntfs_item_parent WHERE drive=? AND parent=? AND id>? AND directory=0 ORDER BY id LIMIT 1"
+    ).get(drive, parent, file);
+    return next ? { id: next.id, cursor: { parent, folder, parentId, file: next.id } }
+      : { cursor: { folder, parentId } };
   }
 
   hasItem(drive, id) {
