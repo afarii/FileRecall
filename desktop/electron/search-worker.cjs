@@ -73,6 +73,12 @@ parentPort.on("message", ({ id, kind, query, drives, favoritesOnly }) => {
         motw ??= new MotwMemory(workerData.motwDatabase, { readOnly: true });
         files = [...motw.search(query), ...files];
       }
+    } else if (kind === "smart-context") {
+      const catalog=ntfsReader();
+      files=catalog?(drives||[]).flatMap(({drive,cached})=>catalog.smartContext(drive,query).map(row=>({
+        type:"ntfs",file:{id:row.id,drive,name:row.name,path:fullPath(row),directory:false,cached,
+          favorite:row.favorite||0,useCount:row.useCount||0,lastUsedAt:row.lastUsedAt||0}
+      }))):[];
     } else if (kind === "unified" || kind === "unified-deep") {
       const list = Array.isArray(drives) ? drives : [];
       const source = localReader();
