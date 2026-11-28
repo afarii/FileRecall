@@ -113,7 +113,7 @@ interface SourceMemorySettings { available: boolean; enabled: boolean; count: nu
 
 type SmartRecord = ({type:"local";file:FileRecord}|{type:"ntfs";file:NtfsResult}|{type:"download";file:BrowserDownload}) & {evidence:string[]};
 interface SmartResult {
-  plan: { topic:string;domain:string;extensions:string[];range:{from:number;until:number;label:string}|null;status:string;favorites:boolean;recorded:boolean };
+  plan: { topic:string;category?:string;domain:string;extensions:string[];range:{from:number;until:number;label:string}|null;status:string;favorites:boolean;recorded:boolean };
   records:SmartRecord[];notes:string[];semanticIndexed:number;semanticUsed:boolean;truncated:boolean;
 }
 
