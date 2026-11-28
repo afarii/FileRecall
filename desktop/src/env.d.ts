@@ -136,6 +136,7 @@ interface Window {
     clearSources(): Promise<SourceMemorySettings>;
     forgetSource(id: string): Promise<boolean>;
     openSourceFile(id: string): Promise<boolean>;
+    restoreSourceFile(id: string): Promise<{ ok: boolean; message?: string }>;
     sourceFileState(id: string): Promise<{ favorite: boolean } | null>;
     favoriteSourceFile(id: string, enabled: boolean): Promise<boolean>;
     linkedFile(id: string): Promise<Pick<FileRecord, "path" | "name" | "status"> | null>;
