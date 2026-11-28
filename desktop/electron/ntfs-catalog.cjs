@@ -388,6 +388,29 @@ class NtfsCatalog {
     });
   }
 
+  // Explicit smart search only. Scan materialized directory names once,
+  // then use the indexed parent->file join. No filesystem or content I/O.
+  smartContext(drive, plan) {
+    const terms=String(plan.topic||"").toLowerCase().trim().split(/\s+/).filter(Boolean).slice(0,12);
+    const extensions=plan.extensions||[];
+    if(!terms.length||!extensions.length)return [];
+    const parentWhere=terms.map(()=> "instr(folded, ?) > 0").join(" AND ");
+    const extWhere=extensions.map(()=> "i.folded LIKE ?").join(" OR ");
+    const rows=this.db.prepare(
+      "WITH parents AS MATERIALIZED (SELECT id,path FROM ntfs_parent INDEXED BY ntfs_parent_path WHERE drive=? AND "+
+      parentWhere+" AND instr(folded, char(92)||'$recycle.bin'||char(92))=0 ORDER BY folded,id LIMIT 128) "+
+      "SELECT i.id,i.name,p.path AS directory,i.directory AS isDirectory,coalesce(u.favorite,0) AS favorite,"+
+      "coalesce(u.use_count,0) AS useCount,coalesce(u.last_used_at,0) AS lastUsedAt "+
+      "FROM parents p CROSS JOIN ntfs_item i INDEXED BY ntfs_item_parent ON i.drive=? AND i.parent=p.id "+
+      "LEFT JOIN ntfs_usage u ON u.drive=i.drive AND u.id=i.id "+
+      "WHERE i.directory=0 AND ("+extWhere+")"+(plan.favorites?" AND u.favorite=1":"")+" LIMIT 201"
+    ).all(drive,...terms,drive,...extensions.map(ext=>"%."+ext));
+    return rows.filter(row=>{
+      const path=fullPath(row)?.toLowerCase();
+      return path && !isRecyclePath(path) && path!==this.applicationData && !below(path,this.applicationData);
+    });
+  }
+
   search(drive, query, { fastOnly = false } = {}) {
     const prepared = prepareQuery(query);
     const terms = prepared.terms;
