@@ -41,6 +41,7 @@ function respond(id, action, args = []) {
         return target && capture ? capture.capture(target.volume, target.id) : null;
       }
       case "sourceTargetForVolume": return service.sourceTargetForVolume(args[0], args[1]);
+      case "sourceStateForVolume": return service.sourceStateForVolume(args[0], args[1]);
       case "recordUse": service.catalog.recordUse(args[0], args[1]); return true;
       case "favorite": return service.catalog.favorite(args[0], args[1], args[2]);
       case "trackedDrives": service.trackedDrives = new Set(args[0]); return true;
